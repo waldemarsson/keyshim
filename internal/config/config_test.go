@@ -111,13 +111,20 @@ func TestClients(t *testing.T) {
 	}
 }
 
-func TestRuleClientsMustExist(t *testing.T) {
+func TestRuleClientsMayNotExistYet(t *testing.T) {
 	hash := HashToken("fm_token")
 	base := "clients:\n  - {name: agentbox, tokenHash: " + hash + "}\nrules:\n  - {host: a.com, clients: [%s], inject: [{header: A, value: x}]}\n"
-	if _, err := Load(writeConfig(t, fmt.Sprintf(base, "agentbox"))); err != nil {
+	cfg, err := Load(writeConfig(t, fmt.Sprintf(base, "agentbox")))
+	if err != nil || len(cfg.Warnings()) != 0 {
+		t.Fatalf("err = %v, warnings = %v", err, cfg.Warnings())
+	}
+	// Unknown clients are a warning, not an error, so the client can be
+	// added after the rule.
+	cfg, err = Load(writeConfig(t, fmt.Sprintf(base, "missing")))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(writeConfig(t, fmt.Sprintf(base, "missing"))); err == nil || !strings.Contains(err.Error(), `unknown client "missing"`) {
-		t.Errorf("unknown client: err = %v", err)
+	if w := cfg.Warnings(); len(w) != 1 || !strings.Contains(w[0], `client "missing" does not exist`) {
+		t.Errorf("warnings = %v", w)
 	}
 }

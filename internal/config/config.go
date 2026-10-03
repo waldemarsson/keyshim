@@ -378,11 +378,6 @@ func (c *Config) Validate() error {
 		if r.Host == "" {
 			add("rule %s: host is required", label)
 		}
-		for _, client := range r.Clients {
-			if !seenClients[client] {
-				add("rule %s: unknown client %q", label, client)
-			}
-		}
 		for _, p := range r.Paths {
 			if !strings.HasPrefix(p, "/") {
 				add("rule %s: path %q must start with /", label, p)
@@ -404,6 +399,29 @@ func (c *Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Warnings reports configuration that is valid but probably not intended.
+// A rule naming an unknown client is allowed, so a client can be added
+// after the rule; until then the rule applies to nobody.
+func (c *Config) Warnings() []string {
+	known := map[string]bool{}
+	for _, cl := range c.Clients {
+		known[cl.Name] = true
+	}
+	var out []string
+	for i, r := range c.Rules {
+		label := r.Name
+		if label == "" {
+			label = fmt.Sprintf("#%d", i+1)
+		}
+		for _, client := range r.Clients {
+			if !known[client] {
+				out = append(out, fmt.Sprintf("rule %s: client %q does not exist, so the rule does not apply to it", label, client))
+			}
+		}
+	}
+	return out
 }
 
 func isLoopback(host string) bool {
