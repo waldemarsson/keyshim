@@ -20,6 +20,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/fullmakt/internal/keystore"
 )
 
 const (
@@ -29,11 +32,14 @@ const (
 	caValidity      = 2 * 365 * 24 * time.Hour
 	leafValidity    = 7 * 24 * time.Hour
 	leafRenewBefore = 24 * time.Hour
-	clockSkew       = time.Hour
+	// maxLeaves bounds the leaf cache; wildcard rules let clients ask for
+	// any number of hosts.
+	maxLeaves = 1024
+	clockSkew = time.Hour
 )
 
-// Authority signs short-lived leaf certificates. The CA key stays on disk in
-// a directory only the owner can access; leaf keys exist only in memory.
+// Authority signs short-lived leaf certificates. The CA key is stored on disk
+// encrypted with the master key; leaf keys exist only in memory.
 type Authority struct {
 	cert     *x509.Certificate
 	key      crypto.Signer
@@ -41,13 +47,20 @@ type Authority struct {
 	certPath string
 	leafKey  *ecdsa.PrivateKey
 	now      func() time.Time
+	// Migrated reports that a plaintext CA key from an older version was
+	// encrypted during load.
+	Migrated bool
 
 	mu     sync.Mutex
 	leaves map[string]*tls.Certificate
 }
 
-// LoadOrCreate loads the CA from dir, creating it on first use.
-func LoadOrCreate(dir string) (*Authority, error) {
+// keyPurpose binds the encrypted CA key to its use.
+const keyPurpose = "ca-key"
+
+// LoadOrCreate loads the CA from dir, creating it on first use. master
+// encrypts the CA private key.
+func LoadOrCreate(dir string, master *keystore.Key) (*Authority, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -58,7 +71,7 @@ func LoadOrCreate(dir string) (*Authority, error) {
 
 	certPEM, err := os.ReadFile(certPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		if err := create(certPath, keyPath); err != nil {
+		if err := create(certPath, keyPath, master); err != nil {
 			return nil, fmt.Errorf("create CA: %w", err)
 		}
 		certPEM, err = os.ReadFile(certPath)
@@ -69,9 +82,20 @@ func LoadOrCreate(dir string) (*Authority, error) {
 	if err := checkPrivate(keyPath); err != nil {
 		return nil, err
 	}
-	keyPEM, err := os.ReadFile(keyPath)
+	keyFileData, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, err
+	}
+	keyPEM, err := master.Open(keyPurpose, keyFileData)
+	migrated := false
+	if errors.Is(err, keystore.ErrNotSealed) {
+		// Plaintext key from before encryption: encrypt it in place.
+		if err := migrateKey(keyPath, keyFileData, master); err != nil {
+			return nil, fmt.Errorf("%s: encrypt plaintext key: %w", keyPath, err)
+		}
+		keyPEM, migrated = keyFileData, true
+	} else if err != nil {
+		return nil, fmt.Errorf("%s: %w", keyPath, err)
 	}
 
 	cert, err := parseCert(certPEM)
@@ -100,6 +124,7 @@ func LoadOrCreate(dir string) (*Authority, error) {
 		leafKey:  leafKey,
 		now:      time.Now,
 		leaves:   map[string]*tls.Certificate{},
+		Migrated: migrated,
 	}, nil
 }
 
@@ -157,11 +182,14 @@ func (a *Authority) Leaf(host string) (*tls.Certificate, error) {
 		PrivateKey:  a.leafKey,
 		Leaf:        leaf,
 	}
+	if len(a.leaves) >= maxLeaves {
+		clear(a.leaves) // reissuing is cheap; a simple reset keeps memory bounded
+	}
 	a.leaves[host] = c
 	return c, nil
 }
 
-func create(certPath, keyPath string) error {
+func create(certPath, keyPath string, master *keystore.Key) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -192,11 +220,28 @@ func create(certPath, keyPath string) error {
 	if err != nil {
 		return err
 	}
+	sealedKey, err := master.Seal(keyPurpose, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+	if err != nil {
+		return err
+	}
 	// Write the key first and exclusively, so an existing key is never replaced.
-	if err := writeExclusive(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	if err := writeExclusive(keyPath, sealedKey, 0o600); err != nil {
 		return err
 	}
 	return writeExclusive(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+}
+
+// migrateKey replaces a plaintext PEM key with its encrypted form after
+// checking that it parses.
+func migrateKey(path string, keyPEM []byte, master *keystore.Key) error {
+	if _, err := parseKey(keyPEM); err != nil {
+		return err
+	}
+	sealedKey, err := master.Seal(keyPurpose, keyPEM)
+	if err != nil {
+		return err
+	}
+	return config.WriteFileAtomic(path, sealedKey, 0o600)
 }
 
 func writeExclusive(path string, data []byte, perm os.FileMode) error {

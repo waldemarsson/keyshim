@@ -12,6 +12,7 @@ type Event struct {
 	Time       time.Time `json:"time"`
 	Kind       string    `json:"kind"`           // connect or request
 	Mode       string    `json:"mode,omitempty"` // intercept, tunnel or plain
+	Client     string    `json:"client,omitempty"`
 	Host       string    `json:"host"`
 	Method     string    `json:"method,omitempty"`
 	Path       string    `json:"path,omitempty"`
@@ -31,6 +32,7 @@ func (e Event) Attrs() []any {
 			attrs = append(attrs, key, value)
 		}
 	}
+	add("client", e.Client, e.Client != "")
 	add("mode", e.Mode, e.Mode != "")
 	add("method", e.Method, e.Method != "")
 	add("path", e.Path, e.Path != "")

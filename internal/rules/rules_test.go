@@ -110,6 +110,19 @@ func TestDisabledRules(t *testing.T) {
 	}
 }
 
+func TestWildcardStaysWithinOwner(t *testing.T) {
+	e := mustCompile(t, config.Rule{Name: "aws", Host: "*.amazonaws.com", Inject: bearer("gh")})
+	u, _ := url.Parse("/")
+	if e.Match("sts.amazonaws.com", "443", "GET", u) == nil {
+		t.Error("sts.amazonaws.com should match *.amazonaws.com")
+	}
+	for _, host := range []string{"evil.s3.amazonaws.com", "bucket.s3.eu-west-1.amazonaws.com"} {
+		if r := e.Match(host, "443", "GET", u); r != nil {
+			t.Errorf("%s matched %s; it belongs to whoever owns the bucket", host, r.Name)
+		}
+	}
+}
+
 func TestIntercepts(t *testing.T) {
 	e := mustCompile(t, config.Rule{Host: "*.example.com", Inject: bearer("gh")})
 	if !e.Intercepts("x.example.com", "443") {
@@ -167,6 +180,10 @@ func TestCompileErrors(t *testing.T) {
 		{Host: "github.com", Inject: bearer("unknown")},
 		{Host: "github.com", Inject: []config.Inject{{Header: "A", Value: "{{ secret "}}},
 		{Host: "*.com", Inject: bearer("gh")},
+		{Host: "*.co.uk", Inject: bearer("gh")},
+		{Host: "*.s3.amazonaws.com", Inject: bearer("gh")},
+		{Host: "*.github.io", Inject: bearer("gh")},
+		{Host: "*.azurewebsites.net", Inject: bearer("gh")},
 		{Host: "github.com:99999", Inject: bearer("gh")},
 		{Host: "git*hub.com", Inject: bearer("gh")},
 	}

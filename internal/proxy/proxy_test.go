@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -22,17 +24,25 @@ import (
 	"github.com/waldemarsson/fullmakt/internal/audit"
 	"github.com/waldemarsson/fullmakt/internal/ca"
 	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
 	"github.com/waldemarsson/fullmakt/internal/rules"
 )
 
-const testSecret = "s3cret-token-value"
+const (
+	testSecret      = "s3cret-token-value"
+	testClient      = "sandbox"
+	testClientToken = "fmk_test-client-token"
+)
+
+var testClients = map[string][32]byte{testClient: sha256.Sum256([]byte(testClientToken))}
 
 // upstream records the Authorization header it receives and echoes it in a
 // response header and the body, gzip-encoded when the client accepts gzip.
 type upstream struct {
 	*httptest.Server
-	mu   sync.Mutex
-	auth []string
+	mu     sync.Mutex
+	auth   []string
+	ranges []string
 }
 
 func newUpstream(t *testing.T) *upstream {
@@ -41,6 +51,7 @@ func newUpstream(t *testing.T) *upstream {
 		auth := r.Header.Get("Authorization")
 		u.mu.Lock()
 		u.auth = append(u.auth, auth)
+		u.ranges = append(u.ranges, r.Header.Get("Range"))
 		u.mu.Unlock()
 
 		w.Header().Set("X-Echo-Auth", auth)
@@ -67,10 +78,12 @@ func (u *upstream) lastAuth() string {
 }
 
 type fixture struct {
-	target *upstream // matched by the rule
-	other  *upstream // no rule: tunneled
-	client *http.Client
-	events *audit.Log
+	target   *upstream // matched by the rule
+	other    *upstream // no rule: tunneled
+	client   *http.Client
+	events   *audit.Log
+	proxyURL *url.URL // without credentials
+	roots    *x509.CertPool
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -80,15 +93,15 @@ func newFixture(t *testing.T) *fixture {
 
 	engine, err := rules.Compile([]config.Rule{{
 		Name:    "test",
-		Host:    targetURL.Host, // 127.0.0.1:<port>
-		Methods: []string{"GET"},
+		Host:    targetURL.Host,           // 127.0.0.1:<port>
+		Methods: []string{"GET", "TRACE"}, // TRACE so the refusal can be tested
 		Paths:   []string{"/api/*"},
 		Inject:  []config.Inject{{Header: "Authorization", Value: `Bearer {{ secret "token" }}`}},
 	}}, func(n string) bool { return n == "token" })
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := ca.LoadOrCreate(t.TempDir() + "/ca")
+	authority, err := ca.LoadOrCreate(t.TempDir()+"/ca", keystoretest.NewKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +110,8 @@ func newFixture(t *testing.T) *fixture {
 	upstreamRoots := x509.NewCertPool()
 	upstreamRoots.AddCert(target.Certificate())
 	p := New(Options{
-		Rules: engine,
+		Rules:   engine,
+		Clients: testClients,
 		Secrets: func(_ context.Context, name string) (string, error) {
 			if name != "token" {
 				return "", errors.New("unknown")
@@ -112,7 +126,9 @@ func newFixture(t *testing.T) *fixture {
 	})
 	proxySrv := httptest.NewServer(p)
 	t.Cleanup(proxySrv.Close)
-	proxyURL, _ := url.Parse(proxySrv.URL)
+	f.proxyURL, _ = url.Parse(proxySrv.URL)
+	proxyURL := *f.proxyURL
+	proxyURL.User = url.UserPassword(testClient, testClientToken)
 
 	// The client trusts the fullmakt CA (intercepted host) and the other
 	// upstream's own certificate (tunneled host).
@@ -120,9 +136,10 @@ func newFixture(t *testing.T) *fixture {
 	clientRoots.AppendCertsFromPEM(authority.CertPEM())
 	clientRoots.AddCert(other.Certificate())
 	tr := &http.Transport{
-		Proxy:           http.ProxyURL(proxyURL),
+		Proxy:           http.ProxyURL(&proxyURL),
 		TLSClientConfig: &tls.Config{RootCAs: clientRoots},
 	}
+	f.roots = clientRoots
 	t.Cleanup(tr.CloseIdleConnections)
 	f.client = &http.Client{Transport: tr}
 	return f
@@ -267,15 +284,16 @@ func TestAuditEventsHaveNoSecretValues(t *testing.T) {
 }
 
 func TestBlocksLoopbackTargetsByDefault(t *testing.T) {
-	authority, err := ca.LoadOrCreate(t.TempDir() + "/ca")
+	authority, err := ca.LoadOrCreate(t.TempDir()+"/ca", keystoretest.NewKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	engine, _ := rules.Compile(nil, func(string) bool { return false })
-	p := New(Options{Rules: engine, CA: authority, Logger: slog.New(slog.DiscardHandler)})
+	p := New(Options{Rules: engine, Clients: testClients, CA: authority, Logger: slog.New(slog.DiscardHandler)})
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 	proxyURL, _ := url.Parse(proxySrv.URL)
+	proxyURL.User = url.UserPassword(testClient, testClientToken)
 
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("loopback service was reached through the proxy")
@@ -299,7 +317,8 @@ func TestBlocksLoopbackTargetsByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", local.Listener.Addr(), local.Listener.Addr())
+	auth := base64.StdEncoding.EncodeToString([]byte(testClient + ":" + testClientToken))
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", local.Listener.Addr(), local.Listener.Addr(), auth)
 	resp, err = http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -317,5 +336,99 @@ func TestBlocksLoopbackTargetsByDefault(t *testing.T) {
 		if forbiddenIP(net.ParseIP(ip)) {
 			t.Errorf("%s should be allowed", ip)
 		}
+	}
+}
+
+func TestRequiresClientCredentials(t *testing.T) {
+	f := newFixture(t)
+	for name, user := range map[string]*url.Userinfo{
+		"none":         nil,
+		"wrong token":  url.UserPassword(testClient, "fmk_wrong"),
+		"unknown name": url.UserPassword("other", testClientToken),
+		"empty token":  url.UserPassword(testClient, ""),
+	} {
+		proxyURL := *f.proxyURL
+		proxyURL.User = user
+		client := &http.Client{Transport: &http.Transport{
+			Proxy:           http.ProxyURL(&proxyURL),
+			TLSClientConfig: &tls.Config{RootCAs: f.roots},
+		}}
+		// HTTPS: the CONNECT is refused, so the request never reaches upstream.
+		if _, err := client.Get(f.target.URL + "/api/items"); err == nil || !strings.Contains(err.Error(), "Proxy Authentication Required") {
+			t.Errorf("%s, CONNECT: err = %v, want 407", name, err)
+		}
+		// Plain HTTP is refused too.
+		resp, err := client.Get("http://example.invalid/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusProxyAuthRequired || resp.Header.Get("Proxy-Authenticate") == "" {
+			t.Errorf("%s, plain: status = %d", name, resp.StatusCode)
+		}
+	}
+	if got := f.target.lastAuth(); got != "<none>" {
+		t.Errorf("upstream was reached without credentials: %q", got)
+	}
+	var rejected int
+	for _, e := range f.events.Recent() {
+		if e.Status == http.StatusProxyAuthRequired {
+			rejected++
+		}
+	}
+	if rejected != 8 {
+		t.Errorf("rejected events = %d, want 8", rejected)
+	}
+}
+
+func TestInjectedRequestsDropRangeAndRefuseTrace(t *testing.T) {
+	f := newFixture(t)
+	f.get(t, f.target.URL+"/api/items", func(r *http.Request) { r.Header.Set("Range", "bytes=5-9") })
+	f.target.mu.Lock()
+	gotRange := f.target.ranges[len(f.target.ranges)-1]
+	f.target.mu.Unlock()
+	if gotRange != "" {
+		t.Errorf("Range reached upstream on an injected request: %q", gotRange)
+	}
+	resp, _ := f.get(t, f.target.URL+"/api/items", func(r *http.Request) { r.Method = http.MethodTrace })
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("TRACE: status = %d, want 403", resp.StatusCode)
+	}
+	for _, e := range f.events.Recent() {
+		if e.Kind == "request" && e.Client != testClient {
+			t.Errorf("event without client name: %+v", e)
+		}
+	}
+}
+
+func TestBlocksInterceptedHostResolvingToLoopback(t *testing.T) {
+	authority, err := ca.LoadOrCreate(t.TempDir()+"/ca", keystoretest.NewKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := rules.Compile([]config.Rule{{
+		Host:   "localhost:8443",
+		Inject: []config.Inject{{Header: "Authorization", Value: `Bearer {{ secret "token" }}`}},
+	}}, func(string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New(Options{Rules: engine, Clients: testClients, CA: authority, Logger: slog.New(slog.DiscardHandler)})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte(testClient + ":" + testClientToken))
+	fmt.Fprintf(conn, "CONNECT localhost:8443 HTTP/1.1\r\nHost: localhost:8443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("CONNECT to a rule host resolving to loopback: status = %d, want 403", resp.StatusCode)
 	}
 }

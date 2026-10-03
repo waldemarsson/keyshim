@@ -17,6 +17,8 @@ import (
 	"strings"
 	"text/template"
 
+	"golang.org/x/net/publicsuffix"
+
 	"github.com/waldemarsson/fullmakt/internal/config"
 )
 
@@ -139,8 +141,10 @@ func parseHostPattern(s string) (host, port string, wildcard bool, err error) {
 	if rest, ok := strings.CutPrefix(host, "*."); ok {
 		wildcard = true
 		host = "." + rest
-		if strings.Count(host, ".") < 2 {
-			return "", "", false, fmt.Errorf("host %q: wildcard must cover a domain with at least two labels", s)
+		// A wildcard on a shared suffix (s3.amazonaws.com, github.io,
+		// azurewebsites.net, ...) covers hosts that anyone can register.
+		if suffix, _ := publicsuffix.PublicSuffix(rest); suffix == rest {
+			return "", "", false, fmt.Errorf("host %q: %s is a public suffix where anyone can create subdomains; name exact hosts instead", s, rest)
 		}
 	}
 	if host == "" || host == "." || strings.ContainsAny(host, "*/@ \\") {
@@ -189,9 +193,20 @@ func (r *Rule) matchHost(host, port string) bool {
 		return false
 	}
 	if r.wildcard {
-		return len(host) > len(r.host) && strings.HasSuffix(host, r.host)
+		return len(host) > len(r.host) && strings.HasSuffix(host, r.host) && sameOwner(host, r.host[1:])
 	}
 	return host == r.host
+}
+
+// sameOwner reports whether base lies within host's registrable domain. It
+// stops *.amazonaws.com from matching evil.s3.amazonaws.com, which belongs
+// to whoever created the bucket, not to amazonaws.com.
+func sameOwner(host, base string) bool {
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return false
+	}
+	return base == registrable || strings.HasSuffix(base, "."+registrable)
 }
 
 // matchPaths refuses paths that servers may normalize differently from us,

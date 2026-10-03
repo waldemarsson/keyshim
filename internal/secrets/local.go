@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,22 +11,48 @@ import (
 	"os"
 	"slices"
 	"sync"
-
-	"go.yaml.in/yaml/v3"
+	"time"
 
 	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/fullmakt/internal/keystore"
 )
 
-// Local reads secrets from a YAML file of key: value pairs. The file must not
-// be readable or writable by group or others.
+// localPurpose binds the encrypted file to its use, so it cannot be swapped
+// with another sealed file such as the CA key.
+const localPurpose = "local-secrets"
+
+// ErrExists is returned when adding a key that is already stored. Values are
+// never replaced in place; delete the key first.
+var ErrExists = errors.New("key already exists; delete it first to store a new value")
+
+// Local stores secrets in a file encrypted with the master key. Values can be
+// added and deleted but never read back except by the proxy.
 type Local struct {
 	path string
+	key  *keystore.Key
+	now  func() time.Time
 	mu   sync.Mutex
 }
 
-// NewLocal returns a provider for the file at path.
-func NewLocal(path string) *Local {
-	return &Local{path: path}
+// Entry describes a stored value without revealing it.
+type Entry struct {
+	Name    string    `json:"name"`
+	AddedAt time.Time `json:"addedAt"`
+}
+
+// localFile is the decrypted content of the file.
+type localFile struct {
+	Entries map[string]localEntry `json:"entries"`
+}
+
+type localEntry struct {
+	Value   string    `json:"value"`
+	AddedAt time.Time `json:"addedAt"`
+}
+
+// NewLocal returns a provider for the encrypted file at path.
+func NewLocal(path string, key *keystore.Key) *Local {
+	return &Local{path: path, key: key, now: time.Now}
 }
 
 // Fetch returns the value stored under name.
@@ -35,89 +62,139 @@ func (l *Local) Fetch(_ context.Context, name, version string) (string, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	values, err := l.read()
+	f, err := l.read()
 	if err != nil {
 		return "", err
 	}
-	v, ok := values[name]
+	e, ok := f.Entries[name]
 	if !ok {
 		return "", fmt.Errorf("%s: key %q not found", l.path, name)
 	}
-	return v, nil
+	return e.Value, nil
 }
 
-// Keys returns the stored key names, never the values.
-func (l *Local) Keys() ([]string, error) {
+// Entries lists stored keys by name, without values.
+func (l *Local) Entries() ([]Entry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	values, err := l.read()
+	f, err := l.read()
 	if errors.Is(err, fs.ErrNotExist) {
-		return []string{}, nil
+		return []Entry{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return slices.Sorted(maps.Keys(values)), nil
+	out := make([]Entry, 0, len(f.Entries))
+	for _, name := range slices.Sorted(maps.Keys(f.Entries)) {
+		out = append(out, Entry{Name: name, AddedAt: f.Entries[name].AddedAt})
+	}
+	return out, nil
 }
 
-// Set stores value under key, creating the file if needed.
-func (l *Local) Set(key, value string) error {
-	if key == "" {
-		return errors.New("key is required")
+// Add stores a new key. It fails with ErrExists if the key is already stored.
+func (l *Local) Add(name, value string) error {
+	if name == "" {
+		return errors.New("name is required")
 	}
 	if value == "" {
 		return errors.New("value is required")
 	}
-	return l.update(func(values map[string]string) { values[key] = value })
+	return l.update(func(f *localFile) error {
+		if _, ok := f.Entries[name]; ok {
+			return fmt.Errorf("%q: %w", name, ErrExists)
+		}
+		f.Entries[name] = localEntry{Value: value, AddedAt: l.now().UTC().Truncate(time.Second)}
+		return nil
+	})
 }
 
-// Delete removes key.
-func (l *Local) Delete(key string) error {
-	return l.update(func(values map[string]string) { delete(values, key) })
+// Import adds every pair from values, skipping keys that already exist. It
+// returns the names added and skipped.
+func (l *Local) Import(values map[string]string) (added, skipped []string, err error) {
+	err = l.update(func(f *localFile) error {
+		now := l.now().UTC().Truncate(time.Second)
+		for _, name := range slices.Sorted(maps.Keys(values)) {
+			if _, ok := f.Entries[name]; ok || values[name] == "" {
+				skipped = append(skipped, name)
+				continue
+			}
+			f.Entries[name] = localEntry{Value: values[name], AddedAt: now}
+			added = append(added, name)
+		}
+		return nil
+	})
+	return added, skipped, err
 }
 
-func (l *Local) update(change func(map[string]string)) error {
+// Delete removes a key.
+func (l *Local) Delete(name string) error {
+	return l.update(func(f *localFile) error {
+		if _, ok := f.Entries[name]; !ok {
+			return fmt.Errorf("key %q not found", name)
+		}
+		delete(f.Entries, name)
+		return nil
+	})
+}
+
+func (l *Local) update(change func(*localFile) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	values, err := l.read()
+	f, err := l.read()
 	if errors.Is(err, fs.ErrNotExist) {
-		values, err = map[string]string{}, nil
+		f, err = &localFile{Entries: map[string]localEntry{}}, nil
 	}
 	if err != nil {
 		return err
 	}
-	change(values)
-	data, err := yaml.Marshal(values)
+	if err := change(f); err != nil {
+		return err
+	}
+	plain, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
-	return config.WriteFileAtomic(l.path, data, 0o600)
+	sealed, err := l.key.Seal(localPurpose, plain)
+	if err != nil {
+		return err
+	}
+	return config.WriteFileAtomic(l.path, sealed, 0o600)
 }
 
-// read loads the file after checking its permissions. Callers hold l.mu.
-func (l *Local) read() (map[string]string, error) {
-	f, err := os.Open(l.path)
+// read decrypts the file after checking its permissions. Callers hold l.mu.
+func (l *Local) read() (*localFile, error) {
+	fh, err := os.Open(l.path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer fh.Close()
 
 	// Check the opened file, not the path, so the file cannot be swapped
 	// between the check and the read.
-	info, err := f.Stat()
+	info, err := fh.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		return nil, fmt.Errorf("%s: permissions %#o allow access by group or others; run chmod 600", l.path, perm)
 	}
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(fh)
 	if err != nil {
 		return nil, err
 	}
-	values := map[string]string{}
-	if err := yaml.Unmarshal(data, &values); err != nil {
-		return nil, fmt.Errorf("%s: invalid YAML", l.path)
+	plain, err := l.key.Open(localPurpose, data)
+	if errors.Is(err, keystore.ErrNotSealed) {
+		return nil, fmt.Errorf("%s is not encrypted; move it aside and load it with `fullmakt secrets import`", l.path)
 	}
-	return values, nil
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", l.path, err)
+	}
+	var f localFile
+	if err := json.Unmarshal(plain, &f); err != nil {
+		return nil, fmt.Errorf("%s: invalid content", l.path)
+	}
+	if f.Entries == nil {
+		f.Entries = map[string]localEntry{}
+	}
+	return &f, nil
 }

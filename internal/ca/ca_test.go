@@ -3,15 +3,20 @@ package ca
 import (
 	"bytes"
 	"crypto/x509"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
 )
 
 func TestLoadOrCreate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
-	a, err := LoadOrCreate(dir)
+	key := keystoretest.NewKey(t)
+	a, err := LoadOrCreate(dir, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +28,7 @@ func TestLoadOrCreate(t *testing.T) {
 		t.Errorf("key permissions = %#o", perm)
 	}
 
-	again, err := LoadOrCreate(dir)
+	again, err := LoadOrCreate(dir, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,16 +39,17 @@ func TestLoadOrCreate(t *testing.T) {
 
 func TestLoadOrCreateRejectsOpenDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
+	key := keystoretest.NewKey(t)
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadOrCreate(dir); err == nil {
+	if _, err := LoadOrCreate(dir, key); err == nil {
 		t.Error("want error for group/other-readable directory")
 	}
 }
 
 func TestLeafVerifies(t *testing.T) {
-	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "ca"))
+	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "ca"), keystoretest.NewKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,5 +78,79 @@ func TestLeafVerifies(t *testing.T) {
 	}
 	if renewed == c {
 		t.Error("leaf near expiry was not renewed")
+	}
+}
+
+func TestCAKeyIsEncrypted(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	key := keystoretest.NewKey(t)
+	if _, err := LoadOrCreate(dir, key); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, keyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "PRIVATE KEY") {
+		t.Fatal("CA key is stored in plaintext")
+	}
+	if _, err := LoadOrCreate(dir, keystoretest.NewKey(t)); err == nil {
+		t.Error("CA key opened with another master key")
+	}
+}
+
+func TestPlaintextCAKeyIsMigrated(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ca")
+	key := keystoretest.NewKey(t)
+	first, err := LoadOrCreate(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the pre-encryption layout: a plaintext PEM key.
+	keyPEM, err := key.Open(keyPurpose, mustRead(t, filepath.Join(dir, keyFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, keyFile), keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := LoadOrCreate(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !migrated.Migrated || !bytes.Equal(migrated.CertPEM(), first.CertPEM()) {
+		t.Errorf("Migrated = %v, same CA = %v", migrated.Migrated, bytes.Equal(migrated.CertPEM(), first.CertPEM()))
+	}
+	if strings.Contains(string(mustRead(t, filepath.Join(dir, keyFile))), "PRIVATE KEY") {
+		t.Error("key still in plaintext after migration")
+	}
+	again, err := LoadOrCreate(dir, key)
+	if err != nil || again.Migrated {
+		t.Errorf("second load: migrated = %v, err = %v", again != nil && again.Migrated, err)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestLeafCacheIsBounded(t *testing.T) {
+	a, err := LoadOrCreate(filepath.Join(t.TempDir(), "ca"), keystoretest.NewKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxLeaves + 10 {
+		if _, err := a.Leaf(fmt.Sprintf("h%d.example.com", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(a.leaves); n > maxLeaves {
+		t.Errorf("leaf cache holds %d entries, limit %d", n, maxLeaves)
 	}
 }

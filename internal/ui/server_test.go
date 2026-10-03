@@ -5,35 +5,39 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/waldemarsson/fullmakt/internal/app"
 	"github.com/waldemarsson/fullmakt/internal/audit"
 	"github.com/waldemarsson/fullmakt/internal/ca"
 	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
+	"github.com/waldemarsson/fullmakt/internal/secrets"
 )
 
 const storedValue = "very-secret-local-value"
 
 type harness struct {
-	srv     *Server
-	ts      *httptest.Server
-	cfgPath string
-	changes int
+	announced []string
+	srv       *Server
+	ts        *httptest.Server
+	cfgPath   string
+	changes   int
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	h := &harness{cfgPath: filepath.Join(dir, "config.yaml")}
-	secretsPath := filepath.Join(dir, "secrets.yaml")
-	if err := os.WriteFile(secretsPath, []byte("token: "+storedValue+"\n"), 0o600); err != nil {
+	key := keystoretest.NewKey(t)
+	secretsPath := filepath.Join(dir, "secrets.enc")
+	if err := secrets.NewLocal(secretsPath, key).Add("token", storedValue); err != nil {
 		t.Fatal(err)
 	}
 	content := "providers:\n  local: {type: local, file: " + secretsPath + "}\n" +
@@ -46,15 +50,15 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt, err := app.Build(cfg)
+	rt, err := app.Build(cfg, key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := ca.LoadOrCreate(filepath.Join(dir, "ca"))
+	authority, err := ca.LoadOrCreate(filepath.Join(dir, "ca"), key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	application := app.New(h.cfgPath, cfg, rt, func(*app.Runtime) { h.changes++ })
+	application := app.New(h.cfgPath, key, cfg, rt, func(*app.Runtime) { h.changes++ })
 
 	// Listen first so the server knows its own address for the Host check.
 	h.ts = httptest.NewUnstartedServer(nil)
@@ -66,6 +70,7 @@ func newHarness(t *testing.T) *harness {
 		ProxyListen: "127.0.0.1:8899",
 		Version:     "test",
 		Logger:      slog.New(slog.DiscardHandler),
+		OnLoginURL:  func(u string) { h.announced = append(h.announced, u) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,20 +81,43 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-// login returns a client holding a session cookie.
+// loginToken extracts the login token from the URL fragment.
+func (h *harness) loginToken(t *testing.T) string {
+	t.Helper()
+	token, ok := strings.CutPrefix(h.srv.LoginURL(), "http://"+h.ts.Listener.Addr().String()+"/#login=")
+	if !ok || len(token) != 64 {
+		t.Fatalf("login URL = %s", h.srv.LoginURL())
+	}
+	return token
+}
+
+// exchange posts a login token and returns the response and session token.
+func (h *harness) exchange(t *testing.T, token string) (*http.Response, string) {
+	t.Helper()
+	resp, body := h.do(t, http.DefaultClient, "POST", "/api/session", `{"token":"`+token+`"}`, nil)
+	var out struct {
+		Session string `json:"session"`
+	}
+	_ = json.Unmarshal([]byte(body), &out)
+	return resp, out.Session
+}
+
+// login returns a client that sends a fresh session as a bearer token.
 func (h *harness) login(t *testing.T) *http.Client {
 	t.Helper()
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
-	resp, err := client.Get(h.srv.LoginURL())
-	if err != nil {
-		t.Fatal(err)
+	resp, session := h.exchange(t, h.loginToken(t))
+	if resp.StatusCode != http.StatusOK || len(session) != 64 {
+		t.Fatalf("login: status %d", resp.StatusCode)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.Request.URL.Path != "/" {
-		t.Fatalf("login: status %d, landed on %s", resp.StatusCode, resp.Request.URL)
-	}
-	return client
+	return &http.Client{Transport: bearer(session)}
+}
+
+type bearer string
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+string(b))
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 func (h *harness) do(t *testing.T, client *http.Client, method, path, body string, mutate func(*http.Request)) (*http.Response, string) {
@@ -121,8 +149,7 @@ func TestLoginRequired(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no session: status = %d, want 401", resp.StatusCode)
 	}
-	resp, _ = h.do(t, http.DefaultClient, "GET", "/login?token=wrong", "", nil)
-	if resp.StatusCode != http.StatusForbidden {
+	if resp, _ := h.exchange(t, strings.Repeat("0", 64)); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("bad token: status = %d, want 403", resp.StatusCode)
 	}
 	resp, body := h.do(t, http.DefaultClient, "GET", "/", "", nil)
@@ -131,23 +158,6 @@ func TestLoginRequired(t *testing.T) {
 	}
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
 		t.Errorf("CSP = %q", csp)
-	}
-}
-
-func TestSessionCookieAttributes(t *testing.T) {
-	h := newHarness(t)
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get(h.srv.LoginURL())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	cookies := resp.Cookies()
-	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-		t.Fatalf("cookie = %+v", cookies)
-	}
-	if loc := resp.Header.Get("Location"); strings.Contains(loc, "token") {
-		t.Errorf("redirect keeps token: %s", loc)
 	}
 }
 
@@ -181,9 +191,18 @@ func TestSecretValuesAreWriteOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("check: status = %d", resp.StatusCode)
 	}
-	resp, _ = h.do(t, client, "PUT", "/api/providers/local/keys/other", `{"value":"`+storedValue+`-2"}`, nil)
+	resp, _ = h.do(t, client, "POST", "/api/providers/local/keys", `{"name":"other","value":"`+storedValue+`-2"}`, nil)
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("set key: status = %d", resp.StatusCode)
+		t.Fatalf("add key: status = %d", resp.StatusCode)
+	}
+	// Existing values cannot be replaced, and there is no route to edit one.
+	resp, _ = h.do(t, client, "POST", "/api/providers/local/keys", `{"name":"token","value":"replacement"}`, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("overwrite: status = %d, want 409", resp.StatusCode)
+	}
+	resp, _ = h.do(t, client, "PUT", "/api/providers/local/keys/token", `{"value":"replacement"}`, nil)
+	if resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusNotFound {
+		t.Errorf("PUT on a value: status = %d, want 404 or 405", resp.StatusCode)
 	}
 	for _, path := range []string{"/api/config", "/api/secrets", "/api/providers/local/keys", "/api/events", "/api/status"} {
 		_, body := h.do(t, client, "GET", path, "", nil)
@@ -192,9 +211,15 @@ func TestSecretValuesAreWriteOnly(t *testing.T) {
 		}
 	}
 	_, body := h.do(t, client, "GET", "/api/providers/local/keys", "", nil)
-	var keys []string
-	if err := json.Unmarshal([]byte(body), &keys); err != nil || strings.Join(keys, ",") != "other,token" {
-		t.Errorf("keys = %s", body)
+	var entries []secrets.Entry
+	if err := json.Unmarshal([]byte(body), &entries); err != nil || len(entries) != 2 ||
+		entries[0].Name != "other" || entries[1].Name != "token" || entries[1].AddedAt.IsZero() {
+		t.Errorf("entries = %s", body)
+	}
+
+	resp, _ = h.do(t, client, "DELETE", "/api/providers/local/keys/other", "", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete: status = %d", resp.StatusCode)
 	}
 }
 
@@ -235,10 +260,74 @@ func TestPutConfig(t *testing.T) {
 	}
 }
 
-func TestLoginURLUsesListenAddress(t *testing.T) {
+func TestLoginTokenIsSingleUse(t *testing.T) {
 	h := newHarness(t)
-	u, err := url.Parse(h.srv.LoginURL())
-	if err != nil || u.Host != h.ts.Listener.Addr().String() || len(u.Query().Get("token")) != 64 {
-		t.Errorf("login URL = %s", h.srv.LoginURL())
+	first := h.loginToken(t)
+	if resp, session := h.exchange(t, first); resp.StatusCode != http.StatusOK || session == "" {
+		t.Fatalf("first login: status %d", resp.StatusCode)
+	}
+	if resp, _ := h.exchange(t, first); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("reused token: status = %d, want 403", resp.StatusCode)
+	}
+	if next := h.loginToken(t); next == first {
+		t.Error("login token was not replaced")
+	}
+	if len(h.announced) != 2 || h.announced[1] != h.srv.LoginURL() {
+		t.Errorf("announced URLs = %d, want the new URL announced after login", len(h.announced))
+	}
+}
+
+func TestNoCookiesAndSessionsExpire(t *testing.T) {
+	h := newHarness(t)
+	resp, session := h.exchange(t, h.loginToken(t))
+	if len(resp.Cookies()) != 0 {
+		t.Errorf("login set cookies: %v", resp.Cookies())
+	}
+	client := &http.Client{Transport: bearer(session)}
+	if resp, _ := h.do(t, client, "GET", "/api/status", "", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	h.srv.mu.Lock()
+	h.srv.sessions[session] = time.Now().Add(-time.Minute)
+	h.srv.mu.Unlock()
+	if resp, _ := h.do(t, client, "GET", "/api/status", "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expired session: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestLogout(t *testing.T) {
+	h := newHarness(t)
+	client := h.login(t)
+	if resp, _ := h.do(t, client, "DELETE", "/api/session", "", nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout: status = %d", resp.StatusCode)
+	}
+	if resp, _ := h.do(t, client, "GET", "/api/status", "", nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("after logout: status = %d, want 401", resp.StatusCode)
+	}
+}
+
+func TestClients(t *testing.T) {
+	h := newHarness(t)
+	client := h.login(t)
+	resp, body := h.do(t, client, "POST", "/api/clients", `{"name":"agentbox"}`, nil)
+	var created struct{ Name, Token string }
+	if err := json.Unmarshal([]byte(body), &created); err != nil || resp.StatusCode != http.StatusOK || !regexp.MustCompile(`^fm_[A-Za-z0-9]{16}$`).MatchString(created.Token) {
+		t.Fatalf("add client: status %d body %s", resp.StatusCode, body)
+	}
+	if resp, _ := h.do(t, client, "POST", "/api/clients", `{"name":"agentbox"}`, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("duplicate client: status = %d", resp.StatusCode)
+	}
+	for _, path := range []string{"/api/clients", "/api/config", "/api/status"} {
+		_, body := h.do(t, client, "GET", path, "", nil)
+		if strings.Contains(body, created.Token) || strings.Contains(body, "sha256:") {
+			t.Errorf("%s exposes the token or its hash: %s", path, body)
+		}
+	}
+	saved, err := config.Load(h.cfgPath)
+	if err != nil || len(saved.Clients) != 1 || saved.Clients[0].TokenHash != config.HashToken(created.Token) {
+		t.Errorf("saved clients = %+v, err = %v", saved.Clients, err)
+	}
+	if resp, _ := h.do(t, client, "DELETE", "/api/clients/agentbox", "", nil); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete client: status = %d", resp.StatusCode)
 	}
 }
