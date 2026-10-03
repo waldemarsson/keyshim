@@ -250,6 +250,8 @@ type statusResponse struct {
 	Secrets     int    `json:"secrets"`
 	Rules       int    `json:"rules"`
 	Clients     int    `json:"clients"`
+	// Warnings lists configuration that is valid but probably unintended.
+	Warnings []string `json:"warnings"`
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
@@ -264,6 +266,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		Secrets:     len(cfg.Secrets),
 		Rules:       len(cfg.Rules),
 		Clients:     len(cfg.Clients),
+		Warnings:    append([]string{}, cfg.Warnings()...),
 	})
 }
 

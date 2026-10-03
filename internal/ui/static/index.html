@@ -31,7 +31,11 @@
       <p>Open the newest login URL that <code>fullmakt run</code> printed in the terminal. Each URL works once; a new one is printed after every login.</p>
     </div>
 
-    <section class="panel" id="activity" hidden>
+    <section class="panel" id="view-activity" hidden>
+      <div class="attention" id="attention" hidden>
+        <h2>Needs attention</h2>
+        <ul id="attention-list"></ul>
+      </div>
       <div class="panel-head">
         <div>
           <h1>Activity</h1>
@@ -39,21 +43,23 @@
         </div>
         <div class="actions">
           <input type="search" id="activity-filter" placeholder="Filter host, path, rule…" aria-label="Filter activity">
-          <label class="check"><input type="checkbox" id="activity-secrets-only"> With secrets only</label>
+          <select id="activity-client" aria-label="Filter by client"><option value="">All clients</option></select>
+          <label class="check"><input type="checkbox" id="activity-secrets-only"> With secrets</label>
+          <label class="check" title="Intercepted connections are followed by their requests, so they are hidden by default."><input type="checkbox" id="activity-connections"> Connections</label>
           <button type="button" class="btn" id="activity-pause">Pause</button>
           <button type="button" class="btn" id="activity-clear">Clear</button>
         </div>
       </div>
       <div class="table-wrap">
         <table class="table" id="activity-table">
-          <thead><tr><th>Time</th><th>Client</th><th>Mode</th><th>Request</th><th>Rule</th><th>Secrets</th><th class="num">Status</th><th class="num">ms</th></tr></thead>
+          <thead><tr><th>Time</th><th>Client</th><th class="optional">Mode</th><th>Request</th><th class="optional">Rule</th><th>Secrets</th><th class="num">Status</th><th class="num optional">ms</th></tr></thead>
           <tbody></tbody>
         </table>
         <p class="empty" id="activity-empty">No activity yet. Point a client at the proxy to see requests here.</p>
       </div>
     </section>
 
-    <section class="panel" id="secrets" hidden>
+    <section class="panel" id="view-secrets" hidden>
       <div class="panel-head">
         <div>
           <h1>Secrets</h1>
@@ -70,7 +76,7 @@
       </div>
     </section>
 
-    <section class="panel" id="rules" hidden>
+    <section class="panel" id="view-rules" hidden>
       <div class="panel-head">
         <div>
           <h1>Rules</h1>
@@ -82,7 +88,7 @@
       <p class="empty" id="rules-empty">No rules yet. Without rules, all traffic is passed through untouched.</p>
     </section>
 
-    <section class="panel" id="providers" hidden>
+    <section class="panel" id="view-providers" hidden>
       <div class="panel-head">
         <div>
           <h1>Providers</h1>
@@ -99,7 +105,7 @@
       </div>
     </section>
 
-    <section class="panel" id="setup" hidden>
+    <section class="panel" id="view-setup" hidden>
       <div class="panel-head">
         <div>
           <h1>Setup</h1>
@@ -108,13 +114,7 @@
       </div>
       <div class="grid">
         <div class="box">
-          <h2>1. Trust the CA</h2>
-          <p>Sandboxes must trust fullmakt's CA for hosts that receive secrets. Trust it <strong>only inside sandboxes</strong>, never on this machine: whoever holds the CA key could intercept HTTPS for everything that trusts it.</p>
-          <p><button type="button" class="btn primary" id="download-ca">Download CA certificate</button></p>
-          <pre class="code" id="setup-ca"></pre>
-        </div>
-        <div class="box">
-          <h2>2. Add a client</h2>
+          <h2>1. Add a client</h2>
           <p>Each sandbox gets its own name and token. Requests without valid client credentials are refused. The token is shown once.</p>
           <div class="table-wrap">
             <table class="table" id="clients-table">
@@ -126,11 +126,17 @@
           <p><button type="button" class="btn primary" id="add-client">Add client</button></p>
         </div>
         <div class="box">
+          <h2>2. Trust the CA</h2>
+          <p>Sandboxes must trust fullmakt's CA for hosts that receive secrets. Trust it <strong>only inside sandboxes</strong>, never on this machine: whoever holds the CA key could intercept HTTPS for everything that trusts it.</p>
+          <p><button type="button" class="btn primary" id="download-ca">Download CA certificate</button></p>
+          <pre class="code" id="setup-ca"></pre>
+        </div>
+        <div class="box">
           <h2>3. Use the proxy</h2>
           <p>Set these in the sandbox, with the client's name and token. Give tools the placeholder <code>proxy-managed</code> as their credential; rules decide which secret replaces it.</p>
           <pre class="code" id="setup-env"></pre>
         </div>
-        <div class="box">
+        <div class="box wide">
           <h2>Configuration</h2>
           <dl class="facts" id="setup-facts"></dl>
           <p>Changes made here are saved to the configuration file right away. Comments in the file are not preserved.</p>
