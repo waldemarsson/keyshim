@@ -20,6 +20,12 @@ authority without holding it.
 
 ## Security model
 
+> **No warranty.** Fullmakt is provided "as is", without warranty of any
+> kind, under the [Apache License 2.0](LICENSE). It reduces exposure of
+> secrets to sandboxed agents but cannot rule out leaks: the guarantees below
+> are design goals, not promises. Review the limits, keep tokens narrowly
+> scoped, and report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+
 Guarantees, when fullmakt runs outside the sandbox (on the host or in a
 separate VM or container):
 
@@ -299,3 +305,9 @@ Set `disabled: true` on a rule to pause it, or use Pause in the UI. A
 paused rule is still validated but never matches. Its requests pass through
 with the client's placeholder, and its host is tunneled unless another rule
 covers it.
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE). Provided without warranty; the
+authors are not liable for damages arising from its use, including leaked
+secrets, as set out in sections 7 and 8 of the license.
