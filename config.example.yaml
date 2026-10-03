@@ -58,6 +58,7 @@ rules:
   - name: github-api
     # disabled: true              # pause the rule without deleting it
     host: api.github.com          # optional :port, default 443; "*.domain" for subdomains
+    clients: [agentbox]           # optional; only these proxy clients get the secret
     methods: [GET, POST, PATCH]   # optional; default any
     paths: ["/repos/my-org/*"]    # optional; '*' matches any characters including '/'
     inject:

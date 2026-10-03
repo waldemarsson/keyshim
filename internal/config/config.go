@@ -95,11 +95,13 @@ type Secret struct {
 type Rule struct {
 	Name string `yaml:"name,omitempty" json:"name"`
 	// Disabled pauses the rule: it is still validated but never matches.
-	Disabled bool     `yaml:"disabled,omitempty" json:"disabled"`
-	Host     string   `yaml:"host" json:"host"`
-	Methods  []string `yaml:"methods,omitempty" json:"methods"`
-	Paths    []string `yaml:"paths,omitempty" json:"paths"`
-	Inject   []Inject `yaml:"inject" json:"inject"`
+	Disabled bool   `yaml:"disabled,omitempty" json:"disabled"`
+	Host     string `yaml:"host" json:"host"`
+	// Clients limits the rule to these proxy clients; empty means all.
+	Clients []string `yaml:"clients,omitempty" json:"clients"`
+	Methods []string `yaml:"methods,omitempty" json:"methods"`
+	Paths   []string `yaml:"paths,omitempty" json:"paths"`
+	Inject  []Inject `yaml:"inject" json:"inject"`
 }
 
 // Inject sets one request header from a template.
@@ -397,6 +399,29 @@ func (c *Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Warnings reports configuration that is valid but probably not intended.
+// A rule naming an unknown client is allowed, so a client can be added
+// after the rule; until then the rule applies to nobody.
+func (c *Config) Warnings() []string {
+	known := map[string]bool{}
+	for _, cl := range c.Clients {
+		known[cl.Name] = true
+	}
+	var out []string
+	for i, r := range c.Rules {
+		label := r.Name
+		if label == "" {
+			label = fmt.Sprintf("#%d", i+1)
+		}
+		for _, client := range r.Clients {
+			if !known[client] {
+				out = append(out, fmt.Sprintf("rule %s: client %q does not exist, so the rule does not apply to it", label, client))
+			}
+		}
+	}
+	return out
 }
 
 func isLoopback(host string) bool {

@@ -83,6 +83,7 @@ type fixture struct {
 	client   *http.Client
 	events   *audit.Log
 	proxyURL *url.URL // without credentials
+	proxy    *Proxy
 	roots    *x509.CertPool
 }
 
@@ -124,6 +125,7 @@ func newFixture(t *testing.T) *fixture {
 		AllowLoopbackTargets: true, // the test upstreams listen on 127.0.0.1
 		UpstreamRootCAs:      upstreamRoots,
 	})
+	f.proxy = p
 	proxySrv := httptest.NewServer(p)
 	t.Cleanup(proxySrv.Close)
 	f.proxyURL, _ = url.Parse(proxySrv.URL)
@@ -430,5 +432,28 @@ func TestBlocksInterceptedHostResolvingToLoopback(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("CONNECT to a rule host resolving to loopback: status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestRuleScopedToAnotherClient(t *testing.T) {
+	f := newFixture(t)
+	targetURL, _ := url.Parse(f.target.URL)
+	engine, err := rules.Compile([]config.Rule{{
+		Host:    targetURL.Host,
+		Clients: []string{"someone-else"},
+		Inject:  []config.Inject{{Header: "Authorization", Value: `Bearer {{ secret "token" }}`}},
+	}}, func(string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.proxy.Update(engine, func(context.Context, string) (string, error) { return testSecret, nil }, testClients)
+
+	resp, _ := f.get(t, f.target.URL+"/api/items", nil)
+	if got := f.target.lastAuth(); got != "Bearer dummy" {
+		t.Errorf("upstream Authorization = %q, want the client's own value", got)
+	}
+	// Tunneled, so the client sees the upstream's own certificate.
+	if resp.TLS == nil || !resp.TLS.PeerCertificates[0].Equal(f.target.Certificate()) {
+		t.Error("request was intercepted although no rule applies to this client")
 	}
 }

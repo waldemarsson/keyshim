@@ -212,6 +212,9 @@ func runCmd(args []string) error {
 	}
 	logger.Info("fullmakt listening", "addr", proxyAddr.String(), "ca", authority.CertPath(),
 		"rules", len(cfg.Rules), "secrets", len(cfg.Secrets), "clients", len(cfg.Clients), "version", version)
+	for _, w := range cfg.Warnings() {
+		logger.Warn(w)
+	}
 	if len(cfg.Clients) == 0 {
 		logger.Warn("no proxy clients configured; every proxy request is refused until you add one with `fullmakt client add <name>` or the UI")
 	}
@@ -265,7 +268,10 @@ func checkCmd(args []string) error {
 		return err
 	}
 	store := rt.Store
-	fmt.Printf("config ok: %d providers, %d secrets, %d rules\n", len(cfg.Providers), len(cfg.Secrets), len(cfg.Rules))
+	fmt.Printf("config ok: %d providers, %d secrets, %d rules, %d clients\n", len(cfg.Providers), len(cfg.Secrets), len(cfg.Rules), len(cfg.Clients))
+	for _, w := range cfg.Warnings() {
+		fmt.Println("warning:", w)
+	}
 	if !*resolve {
 		return nil
 	}

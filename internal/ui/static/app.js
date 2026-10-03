@@ -127,6 +127,7 @@ function normalizeConfig(c) {
       name: r.name || "",
       disabled: !!r.disabled,
       host: r.host,
+      clients: r.clients || [],
       methods: r.methods || [],
       paths: r.paths || [],
       inject: r.inject || [],
@@ -615,6 +616,8 @@ function renderRules() {
         { class: "kv" },
         h("dt", { text: "Host" }),
         h("dd", { class: "mono", text: r.host }),
+        h("dt", { text: "Clients" }),
+        h("dd", {}, r.clients.length ? chips(r.clients) : h("span", { class: "note", text: "All clients" })),
         h("dt", { text: "Methods" }),
         h("dd", {}, r.methods.length ? chips(r.methods) : h("span", { class: "note", text: "Any method" })),
         h("dt", { text: "Paths" }),
@@ -704,9 +707,14 @@ function ruleDialog(index) {
     location.hash = "#secrets";
     return;
   }
-  const r = index === undefined ? { name: "", disabled: false, host: "", methods: [], paths: [], inject: [{ header: "Authorization", value: "" }] } : state.config.rules[index];
+  const r = index === undefined ? { name: "", disabled: false, host: "", clients: [], methods: [], paths: [], inject: [{ header: "Authorization", value: "" }] } : state.config.rules[index];
   const name = textInput(r.name, { placeholder: "github-api" });
   const host = textInput(r.host, { placeholder: "api.github.com" });
+  const clientNames = (state.clients || []).map((c) => c.name);
+  // Keep clients the rule names even if they no longer exist, so the server
+  // can report them instead of the dialog silently dropping them.
+  const clientOptions = [...new Set([...clientNames, ...r.clients])].sort();
+  const clientBoxes = clientOptions.map((c) => h("label", { class: "check" }, h("input", { type: "checkbox", value: c, checked: r.clients.includes(c) }), c));
   const methodBoxes = METHODS.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", value: m, checked: r.methods.includes(m) }), m));
   const paths = h("textarea", { rows: "3", placeholder: "/repos/my-org/*", spellcheck: "false" });
   paths.value = r.paths.join("\n");
@@ -720,6 +728,13 @@ function ruleDialog(index) {
       "div",
       { class: "stack" },
       h("div", { class: "field-row" }, field("Name", name), field("Host", host, "api.github.com, *.example.com or host:8443. Port defaults to 443.")),
+      h(
+        "div",
+        { class: "field" },
+        h("span", { text: "Clients" }),
+        clientBoxes.length ? h("div", { class: "methods" }, clientBoxes) : null,
+        h("span", { class: "hint", text: clientBoxes.length ? "Only these clients receive the secret. None selected means all clients." : "No clients yet; the rule applies to all clients. Add clients under Setup." }),
+      ),
       h("div", { class: "field" }, h("span", { text: "Methods" }), h("div", { class: "methods" }, methodBoxes), h("span", { class: "hint", text: "None selected means any method." })),
       field("Paths", paths, "One per line. * matches any characters, including /. Empty means any path."),
       h("div", { class: "field" }, h("span", { text: "Headers" }), injects, h("div", {}, addHeader)),
@@ -729,6 +744,7 @@ function ruleDialog(index) {
         name: name.value.trim(),
         disabled: r.disabled || false,
         host: host.value.trim(),
+        clients: clientBoxes.map((l) => $("input", l)).filter((c) => c.checked).map((c) => c.value),
         methods: methodBoxes.map((l) => $("input", l)).filter((c) => c.checked).map((c) => c.value),
         paths: paths.value.split("\n").map((p) => p.trim()).filter(Boolean),
         inject: [...injects.children].map((row) => row.read()),
@@ -1017,6 +1033,11 @@ function showClientToken({ name, token }) {
 }
 
 function deleteClient(name) {
+  const used = state.config.rules.filter((r) => r.clients.includes(name)).map((r) => r.name || r.host);
+  if (used.length) {
+    toast(`Client ${name} is used by rules ${used.join(", ")}. Remove it from those rules first.`, true);
+    return;
+  }
   if (!confirm(`Delete client ${name}? Its token stops working immediately.`)) return;
   run(async () => {
     await api("DELETE", `/api/clients/${encodeURIComponent(name)}`);
