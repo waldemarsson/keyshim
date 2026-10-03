@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,9 @@ func TestAllowNonLoopback(t *testing.T) {
 }
 
 func TestRefusesConfigWritableByOthers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not reflect ACLs on Windows; the check is skipped there")
+	}
 	path := writeConfig(t, "listen: 127.0.0.1:8899\n")
 	if err := os.Chmod(path, 0o664); err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,12 +21,14 @@ func TestLoadOrCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(filepath.Join(dir, keyFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("key permissions = %#o", perm)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, keyFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("key permissions = %#o", perm)
+		}
 	}
 
 	again, err := LoadOrCreate(dir, key)
@@ -38,6 +41,9 @@ func TestLoadOrCreate(t *testing.T) {
 }
 
 func TestLoadOrCreateRejectsOpenDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not reflect ACLs on Windows; the check is skipped there")
+	}
 	dir := filepath.Join(t.TempDir(), "ca")
 	key := keystoretest.NewKey(t)
 	if err := os.Mkdir(dir, 0o755); err != nil {

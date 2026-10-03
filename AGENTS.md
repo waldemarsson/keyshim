@@ -19,8 +19,8 @@ scripts/build-release.sh v0.0.0-dev dist   # local release build; replaces dist/
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these: formatting, vet, tests and
-the JavaScript check on Linux and macOS, the rest on Linux. Run them before
-committing.
+the JavaScript check on Linux, macOS and Windows, the rest on Linux. Run them
+before committing.
 
 ## Layout
 
@@ -71,4 +71,7 @@ Changes must keep all of these. Add or update a test when touching one.
   no console errors or horizontal overflow.
 - Branches: `feature/<short-description>` or `bugfix/<short-description>`
   off `main`. Open draft pull requests; never push to `main`.
-- Windows is not supported yet: permission checks rely on Unix file modes.
+- Windows is supported (CI builds and tests it), but the group/other
+  write-permission checks on `config.yaml`, `key.json`, `ca.key` and
+  `secrets.enc` are no-ops there: Windows file modes do not reflect ACLs.
+  Keep this in mind when touching those checks or their tests.

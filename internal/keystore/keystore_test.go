@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -150,6 +151,9 @@ func TestSealBindsPurposeAndKey(t *testing.T) {
 }
 
 func TestRefusesKeyMetadataWritableByOthers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes do not reflect ACLs on Windows; the check is skipped there")
+	}
 	dir, kr := t.TempDir(), keystoretest.NewKeyring()
 	if _, err := keystore.LoadOrCreate(keychainOptions(dir, kr)); err != nil {
 		t.Fatal(err)
