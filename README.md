@@ -258,6 +258,12 @@ See [`config.example.yaml`](config.example.yaml).
 The first matching rule wins. Hosts take an optional `:port` (default 443),
 and `*.example.com` matches subdomains only.
 
+Set `clients: [agentbox, ci]` on a rule to inject its secrets only for those
+proxy clients; other clients' requests to the host pass through untouched
+and are tunneled unless another rule applies to them. Without `clients`, a
+rule applies to every client. A client can be a whole sandbox or a single
+tool that you give its own proxy credentials.
+
 Set `disabled: true` on a rule to pause it, or use Pause in the UI. A
 paused rule is still validated but never matches. Its requests pass through
 with the client's placeholder, and its host is tunneled unless another rule

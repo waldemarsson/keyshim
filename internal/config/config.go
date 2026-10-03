@@ -95,11 +95,13 @@ type Secret struct {
 type Rule struct {
 	Name string `yaml:"name,omitempty" json:"name"`
 	// Disabled pauses the rule: it is still validated but never matches.
-	Disabled bool     `yaml:"disabled,omitempty" json:"disabled"`
-	Host     string   `yaml:"host" json:"host"`
-	Methods  []string `yaml:"methods,omitempty" json:"methods"`
-	Paths    []string `yaml:"paths,omitempty" json:"paths"`
-	Inject   []Inject `yaml:"inject" json:"inject"`
+	Disabled bool   `yaml:"disabled,omitempty" json:"disabled"`
+	Host     string `yaml:"host" json:"host"`
+	// Clients limits the rule to these proxy clients; empty means all.
+	Clients []string `yaml:"clients,omitempty" json:"clients"`
+	Methods []string `yaml:"methods,omitempty" json:"methods"`
+	Paths   []string `yaml:"paths,omitempty" json:"paths"`
+	Inject  []Inject `yaml:"inject" json:"inject"`
 }
 
 // Inject sets one request header from a template.
@@ -375,6 +377,11 @@ func (c *Config) Validate() error {
 		}
 		if r.Host == "" {
 			add("rule %s: host is required", label)
+		}
+		for _, client := range r.Clients {
+			if !seenClients[client] {
+				add("rule %s: unknown client %q", label, client)
+			}
 		}
 		for _, p := range r.Paths {
 			if !strings.HasPrefix(p, "/") {

@@ -36,6 +36,7 @@ type Rule struct {
 	host     string // exact host, or a suffix starting with "." for wildcards
 	wildcard bool
 	port     string
+	clients  map[string]bool // nil means any client
 	methods  map[string]bool // nil means any method
 	paths    []string        // empty means any path
 	headers  []headerTemplate
@@ -101,6 +102,12 @@ func compileRule(i int, cr config.Rule, known func(string) bool) (*Rule, error) 
 	if r.host, r.port, r.wildcard, err = parseHostPattern(cr.Host); err != nil {
 		return nil, fmt.Errorf("rule %s: %w", r.Name, err)
 	}
+	if len(cr.Clients) > 0 {
+		r.clients = map[string]bool{}
+		for _, c := range cr.Clients {
+			r.clients[c] = true
+		}
+	}
 	if len(cr.Methods) > 0 {
 		r.methods = map[string]bool{}
 		for _, m := range cr.Methods {
@@ -158,23 +165,23 @@ func NormalizeHost(h string) string {
 	return strings.TrimSuffix(strings.ToLower(h), ".")
 }
 
-// Intercepts reports whether CONNECT requests to host:port need TLS
-// interception, meaning at least one rule may apply.
-func (e *Engine) Intercepts(host, port string) bool {
+// Intercepts reports whether client's CONNECT requests to host:port need
+// TLS interception, meaning at least one rule may apply to that client.
+func (e *Engine) Intercepts(host, port, client string) bool {
 	host = NormalizeHost(host)
 	for _, r := range e.rules {
-		if r.matchHost(host, port) {
+		if r.matchClient(client) && r.matchHost(host, port) {
 			return true
 		}
 	}
 	return false
 }
 
-// Match returns the first rule that applies to the request, or nil.
-func (e *Engine) Match(host, port, method string, u *url.URL) *Rule {
+// Match returns the first rule that applies to client's request, or nil.
+func (e *Engine) Match(host, port, method string, u *url.URL, client string) *Rule {
 	host = NormalizeHost(host)
 	for _, r := range e.rules {
-		if !r.matchHost(host, port) {
+		if !r.matchClient(client) || !r.matchHost(host, port) {
 			continue
 		}
 		if r.methods != nil && !r.methods[method] {
@@ -186,6 +193,10 @@ func (e *Engine) Match(host, port, method string, u *url.URL) *Rule {
 		return r
 	}
 	return nil
+}
+
+func (r *Rule) matchClient(client string) bool {
+	return r.clients == nil || r.clients[client]
 }
 
 func (r *Rule) matchHost(host, port string) bool {

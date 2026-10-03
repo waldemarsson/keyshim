@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +108,16 @@ func TestClients(t *testing.T) {
 		if _, err := Load(writeConfig(t, content)); err == nil {
 			t.Errorf("%s: want error", name)
 		}
+	}
+}
+
+func TestRuleClientsMustExist(t *testing.T) {
+	hash := HashToken("fm_token")
+	base := "clients:\n  - {name: agentbox, tokenHash: " + hash + "}\nrules:\n  - {host: a.com, clients: [%s], inject: [{header: A, value: x}]}\n"
+	if _, err := Load(writeConfig(t, fmt.Sprintf(base, "agentbox"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, fmt.Sprintf(base, "missing"))); err == nil || !strings.Contains(err.Error(), `unknown client "missing"`) {
+		t.Errorf("unknown client: err = %v", err)
 	}
 }

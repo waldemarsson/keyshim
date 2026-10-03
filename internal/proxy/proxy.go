@@ -215,7 +215,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev.Client = client
-	intercept := p.state.Load().rules.Intercepts(host, port)
+	intercept := p.state.Load().rules.Intercepts(host, port, client)
 	if intercept {
 		ev.Mode = "intercept"
 	}
@@ -316,7 +316,7 @@ func (p *Proxy) interceptedHandler(host, port, client string) http.Handler {
 
 		st := p.state.Load()
 		var inj *rules.Injection
-		if rule := st.rules.Match(host, port, r.Method, r.URL); rule != nil {
+		if rule := st.rules.Match(host, port, r.Method, r.URL, client); rule != nil {
 			ev.Rule = rule.Name
 			if isUpgrade(r) {
 				ev.Rejected = "protocol upgrade"

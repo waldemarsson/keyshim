@@ -62,7 +62,7 @@ func TestMatch(t *testing.T) {
 	for _, tt := range tests {
 		u, _ := url.Parse(tt.path)
 		got := ""
-		if r := e.Match(tt.host, tt.port, tt.method, u); r != nil {
+		if r := e.Match(tt.host, tt.port, tt.method, u, ""); r != nil {
 			got = r.Name
 		}
 		if got != tt.want {
@@ -86,7 +86,7 @@ func TestMatchRejectsAmbiguousPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %q: %v", p, err)
 		}
-		if r := e.Match("api.github.com", "443", "GET", u); r != nil {
+		if r := e.Match("api.github.com", "443", "GET", u, ""); r != nil {
 			t.Errorf("path %q matched rule %s", p, r.Name)
 		}
 	}
@@ -99,10 +99,10 @@ func TestDisabledRules(t *testing.T) {
 		config.Rule{Name: "paused-only", Disabled: true, Host: "gitlab.com", Inject: bearer("gh")},
 	)
 	u, _ := url.Parse("/")
-	if r := e.Match("api.github.com", "443", "GET", u); r == nil || r.Name != "active" {
+	if r := e.Match("api.github.com", "443", "GET", u, ""); r == nil || r.Name != "active" {
 		t.Errorf("Match = %v, want the active rule after the paused one", r)
 	}
-	if e.Intercepts("gitlab.com", "443") {
+	if e.Intercepts("gitlab.com", "443", "") {
 		t.Error("paused-only host should be tunneled")
 	}
 	if _, err := Compile([]config.Rule{{Disabled: true, Host: "a.com", Inject: bearer("unknown")}}, knownSecrets("gh")); err == nil {
@@ -113,11 +113,11 @@ func TestDisabledRules(t *testing.T) {
 func TestWildcardStaysWithinOwner(t *testing.T) {
 	e := mustCompile(t, config.Rule{Name: "aws", Host: "*.amazonaws.com", Inject: bearer("gh")})
 	u, _ := url.Parse("/")
-	if e.Match("sts.amazonaws.com", "443", "GET", u) == nil {
+	if e.Match("sts.amazonaws.com", "443", "GET", u, "") == nil {
 		t.Error("sts.amazonaws.com should match *.amazonaws.com")
 	}
 	for _, host := range []string{"evil.s3.amazonaws.com", "bucket.s3.eu-west-1.amazonaws.com"} {
-		if r := e.Match(host, "443", "GET", u); r != nil {
+		if r := e.Match(host, "443", "GET", u, ""); r != nil {
 			t.Errorf("%s matched %s; it belongs to whoever owns the bucket", host, r.Name)
 		}
 	}
@@ -125,10 +125,10 @@ func TestWildcardStaysWithinOwner(t *testing.T) {
 
 func TestIntercepts(t *testing.T) {
 	e := mustCompile(t, config.Rule{Host: "*.example.com", Inject: bearer("gh")})
-	if !e.Intercepts("x.example.com", "443") {
+	if !e.Intercepts("x.example.com", "443", "") {
 		t.Error("want intercept for x.example.com:443")
 	}
-	if e.Intercepts("x.example.com", "80") || e.Intercepts("example.com", "443") {
+	if e.Intercepts("x.example.com", "80", "") || e.Intercepts("example.com", "443", "") {
 		t.Error("unexpected intercept")
 	}
 }
@@ -139,7 +139,7 @@ func TestRender(t *testing.T) {
 		{Header: "X-Static", Value: "plain"},
 	}})
 	u, _ := url.Parse("/")
-	inj, err := e.Match("github.com", "443", "GET", u).Render(context.Background(), getter(map[string]string{"gh": "tok"}))
+	inj, err := e.Match("github.com", "443", "GET", u, "").Render(context.Background(), getter(map[string]string{"gh": "tok"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestRender(t *testing.T) {
 func TestRenderRejectsControlCharacters(t *testing.T) {
 	e := mustCompile(t, config.Rule{Host: "github.com", Inject: bearer("gh")})
 	u, _ := url.Parse("/")
-	_, err := e.Match("github.com", "443", "GET", u).Render(context.Background(),
+	_, err := e.Match("github.com", "443", "GET", u, "").Render(context.Background(),
 		getter(map[string]string{"gh": "tok\r\nX-Evil: 1"}))
 	if err == nil || strings.Contains(err.Error(), "tok") {
 		t.Fatalf("err = %v; want control-character error without the value", err)
@@ -212,5 +212,26 @@ func TestGlob(t *testing.T) {
 		if got := glob(tt.pattern, tt.s); got != tt.want {
 			t.Errorf("glob(%q, %q) = %v, want %v", tt.pattern, tt.s, got, tt.want)
 		}
+	}
+}
+
+func TestClientScoping(t *testing.T) {
+	e := mustCompile(t,
+		config.Rule{Name: "agentbox-only", Host: "api.github.com", Clients: []string{"agentbox"}, Inject: bearer("gh")},
+		config.Rule{Name: "ci-only", Host: "api.github.com", Clients: []string{"ci", "other"}, Inject: bearer("other")},
+		config.Rule{Name: "scoped-host", Host: "only.example.com", Clients: []string{"agentbox"}, Inject: bearer("gh")},
+	)
+	u, _ := url.Parse("/")
+	for client, want := range map[string]string{"agentbox": "agentbox-only", "ci": "ci-only", "other": "ci-only", "stranger": ""} {
+		got := ""
+		if r := e.Match("api.github.com", "443", "GET", u, client); r != nil {
+			got = r.Name
+		}
+		if got != want {
+			t.Errorf("client %s: Match = %q, want %q", client, got, want)
+		}
+	}
+	if !e.Intercepts("only.example.com", "443", "agentbox") || e.Intercepts("only.example.com", "443", "ci") {
+		t.Error("a host whose rules are all scoped to other clients should be tunneled")
 	}
 }
