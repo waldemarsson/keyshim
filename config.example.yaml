@@ -1,0 +1,64 @@
+# Copy to ~/.config/fullmakt/config.yaml and adjust.
+
+# Loopback only by default. Anything that can reach this address can use the
+# configured secrets.
+listen: 127.0.0.1:8899
+
+# CA used for TLS interception. Created on first run; the key never leaves
+# this directory. Default: ~/.config/fullmakt/ca
+# caDir: ~/.config/fullmakt/ca
+
+# Management UI, loopback only. `fullmakt run` prints a one-time login URL.
+# ui:
+#   listen: 127.0.0.1:8900
+#   disabled: false
+
+# Proxy clients cannot reach loopback or link-local addresses (this host's
+# services, the UI, cloud metadata endpoints) unless this is set.
+# allowLoopbackTargets: false
+
+providers:
+  # YAML file of key: value pairs; must be chmod 600.
+  local:
+    type: local
+    file: ~/.config/fullmakt/secrets.yaml
+  # Authenticates with DefaultAzureCredential (az login, managed identity,
+  # workload identity, environment).
+  kv:
+    type: azure-keyvault
+    vaultUri: https://my-vault.vault.azure.net
+
+secrets:
+  github:
+    provider: kv
+    name: gh-agent-token   # Key Vault secret name
+    # version: ""          # empty = latest
+    ttl: 15m               # in-memory cache lifetime (default 15m)
+  internal-api:
+    provider: local
+    name: internal-api     # key in the local file
+
+# The first matching rule wins. Requests that match no rule pass through
+# unchanged; hosts that no rule names are tunneled without TLS interception.
+rules:
+  - name: github-api
+    # disabled: true              # pause the rule without deleting it
+    host: api.github.com          # optional :port, default 443; "*.domain" for subdomains
+    methods: [GET, POST, PATCH]   # optional; default any
+    paths: ["/repos/my-org/*"]    # optional; '*' matches any characters including '/'
+    inject:
+      - header: Authorization
+        value: 'Bearer {{ secret "github" }}'
+
+  - name: github-git
+    host: github.com
+    paths: ["/my-org/*"]
+    inject:
+      - header: Authorization
+        value: '{{ basic "x-access-token" (secret "github") }}'
+
+  - name: internal
+    host: api.internal.example.com:8443
+    inject:
+      - header: X-Api-Key
+        value: '{{ secret "internal-api" }}'

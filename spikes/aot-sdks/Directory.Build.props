@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <PublishAot>true</PublishAot>
+    <!-- Report each trim/AOT warning instead of one collapsed warning per assembly. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

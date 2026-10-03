@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fullmakt</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="favicon.svg" alt="" width="22" height="22">
+      <span>Fullmakt</span>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections">
+      <a href="#activity" data-tab="activity">Activity</a>
+      <a href="#secrets" data-tab="secrets">Secrets</a>
+      <a href="#rules" data-tab="rules">Rules</a>
+      <a href="#providers" data-tab="providers">Providers</a>
+      <a href="#setup" data-tab="setup">Setup</a>
+    </nav>
+    <div class="status" id="status"></div>
+  </header>
+
+  <main>
+    <div class="notice" id="signed-out" hidden>
+      <h2>Not signed in</h2>
+      <p>Open the login URL that <code>fullmakt run</code> printed in the terminal. A new URL is created each time fullmakt starts.</p>
+    </div>
+
+    <section class="panel" id="activity" hidden>
+      <div class="panel-head">
+        <div>
+          <h1>Activity</h1>
+          <p class="sub">Connections and requests through the proxy. Secret values never appear here.</p>
+        </div>
+        <div class="actions">
+          <input type="search" id="activity-filter" placeholder="Filter host, path, rule…" aria-label="Filter activity">
+          <label class="check"><input type="checkbox" id="activity-secrets-only"> With secrets only</label>
+          <button type="button" class="btn" id="activity-pause">Pause</button>
+          <button type="button" class="btn" id="activity-clear">Clear</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="activity-table">
+          <thead><tr><th>Time</th><th>Mode</th><th>Request</th><th>Rule</th><th>Secrets</th><th class="num">Status</th><th class="num">ms</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="activity-empty">No activity yet. Point a client at the proxy to see requests here.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="secrets" hidden>
+      <div class="panel-head">
+        <div>
+          <h1>Secrets</h1>
+          <p class="sub">Names that rules use, mapped to values in a provider. Values are fetched on demand and kept only in memory.</p>
+        </div>
+        <div class="actions"><button type="button" class="btn primary" id="add-secret">Add secret</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="secrets-table">
+          <thead><tr><th>Name</th><th>Source</th><th>TTL</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="secrets-empty">No secrets yet. Add a provider first, then map a secret from it.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="rules" hidden>
+      <div class="panel-head">
+        <div>
+          <h1>Rules</h1>
+          <p class="sub">Which HTTPS requests receive which headers. The first matching rule wins; other requests pass through unchanged.</p>
+        </div>
+        <div class="actions"><button type="button" class="btn primary" id="add-rule">Add rule</button></div>
+      </div>
+      <ol class="cards" id="rules-list"></ol>
+      <p class="empty" id="rules-empty">No rules yet. Without rules, all traffic is passed through untouched.</p>
+    </section>
+
+    <section class="panel" id="providers" hidden>
+      <div class="panel-head">
+        <div>
+          <h1>Providers</h1>
+          <p class="sub">Where secret values come from.</p>
+        </div>
+        <div class="actions"><button type="button" class="btn primary" id="add-provider">Add provider</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="providers-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Location</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="providers-empty">No providers yet.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="setup" hidden>
+      <div class="panel-head">
+        <div>
+          <h1>Setup</h1>
+          <p class="sub">Connect a sandbox, VM or container to the proxy.</p>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="box">
+          <h2>1. Trust the CA</h2>
+          <p>Clients must trust fullmakt's CA for hosts that receive secrets. Only the public certificate is downloaded; the key never leaves this machine.</p>
+          <p><a class="btn primary" href="/api/ca.pem" download>Download CA certificate</a></p>
+          <pre class="code" id="setup-ca"></pre>
+        </div>
+        <div class="box">
+          <h2>2. Use the proxy</h2>
+          <p>Set these in the client environment. Give tools the placeholder <code>proxy-managed</code> as their credential; rules decide which secret replaces it.</p>
+          <pre class="code" id="setup-env"></pre>
+        </div>
+        <div class="box">
+          <h2>Configuration</h2>
+          <dl class="facts" id="setup-facts"></dl>
+          <p>Changes made here are saved to the configuration file right away. Comments in the file are not preserved.</p>
+          <p><button type="button" class="btn" id="reload-config">Reload file from disk</button></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="dialog">
+    <form method="dialog" id="dialog-form" novalidate>
+      <header class="dialog-head">
+        <h2 id="dialog-title"></h2>
+      </header>
+      <div class="dialog-body" id="dialog-body"></div>
+      <ul class="errors" id="dialog-errors" hidden></ul>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" id="dialog-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="dialog-submit">Save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
