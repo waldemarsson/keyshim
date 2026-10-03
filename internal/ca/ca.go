@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
 )
 
 const (
@@ -202,8 +202,8 @@ func create(certPath, keyPath string, master *keystore.Key) error {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			Organization: []string{"Fullmakt"},
-			CommonName:   fmt.Sprintf("Fullmakt Local CA %08x", serial.Uint64()&0xffffffff),
+			Organization: []string{"Keyshim"},
+			CommonName:   fmt.Sprintf("Keyshim Local CA %08x", serial.Uint64()&0xffffffff),
 		},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(caValidity),

@@ -1,16 +1,16 @@
-# Fullmakt
+# Keyshim
 
 A local HTTP proxy that adds secrets to outgoing HTTPS requests, so coding
 agents in sandboxes, devcontainers and VMs can use APIs without ever holding
 the credentials.
 
-*Fullmakt* is Swedish for power of attorney: the agent acts with your
-authority without holding it.
+*Keyshim* is a thin layer between the agent and the API that slips the key
+into each request on the way out.
 
 ```text
  sandbox / VM                           host
 ┌────────────────────────┐ HTTPS_PROXY ┌────────────────────────┐     ┌────────────────┐
-│ agent                  │ ──────────► │ fullmakt               │ ──► │ api.github.com │
+│ agent                  │ ──────────► │ keyshim                │ ──► │ api.github.com │
 │ GH_TOKEN=proxy-managed │             │ + Authorization:       │     └────────────────┘
 └────────────────────────┘             │   Bearer <real token>  │
                                        │ secrets: local file,   │
@@ -20,19 +20,19 @@ authority without holding it.
 
 ## Security model
 
-> **No warranty.** Fullmakt is provided "as is", without warranty of any
+> **No warranty.** Keyshim is provided "as is", without warranty of any
 > kind, under the [Apache License 2.0](LICENSE). It reduces exposure of
 > secrets to sandboxed agents but cannot rule out leaks: the guarantees below
 > are design goals, not promises. Review the limits, keep tokens narrowly
 > scoped, and report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
-Guarantees, when fullmakt runs outside the sandbox (on the host or in a
+Guarantees, when keyshim runs outside the sandbox (on the host or in a
 separate VM or container):
 
-- **The agent cannot read secret values.** They exist only in fullmakt's
+- **The agent cannot read secret values.** They exist only in keyshim's
   memory and the vault.
 - **Secrets are only sent to the hosts, methods and paths in the rules**, and
-  only over TLS that fullmakt verifies.
+  only over TLS that keyshim verifies.
 - **Secrets are only injected into headers**, never into bodies or URLs.
 - **Only known clients can use the proxy.** Each sandbox authenticates with
   its own name and token (`HTTPS_PROXY=http://<name>:<token>@host:port`);
@@ -45,7 +45,7 @@ Not guaranteed:
   Keep tokens narrowly scoped and rules tight.
 - **No egress firewall.** Clients that ignore `HTTPS_PROXY` reach the internet
   directly. Their requests simply carry no secrets.
-- **Run fullmakt as your user, not root.** Anyone with your user's access to
+- **Run keyshim as your user, not root.** Anyone with your user's access to
   the host can read the CA key, the local secrets file and the process memory.
 - **Derived credentials are not redacted.** If an API exchanges the injected
   token for another token in the response body, the client receives that one.
@@ -63,7 +63,7 @@ Not guaranteed:
 Request handling details:
 
 - A CONNECT to a host named by a rule is intercepted with a leaf certificate
-  from fullmakt's CA. All other hosts are tunneled untouched.
+  from keyshim's CA. All other hosts are tunneled untouched.
 - Inside an intercepted connection, the `Host` header must match the CONNECT
   target (421 otherwise). This stops a shared CDN or load balancer from
   routing a secret to another tenant.
@@ -75,20 +75,20 @@ Request handling details:
   the same registrable domain as the rule, so `*.amazonaws.com` does not
   match `bucket.s3.amazonaws.com`.
 - `config.yaml` and `key.json` are refused when group or others can write
-  them, since they decide where secrets go. `FULLMAKT_PASSPHRASE` is removed
+  them, since they decide where secrets go. `KEYSHIM_PASSPHRASE` is removed
   from the environment after it is read, so child processes such as `az` do
   not inherit it. The environment the process started with stays readable to
   other processes running as the same user (`/proc/<pid>/environ`, `ps eww`);
   prefer the terminal prompt where possible.
 - Header values that would contain control characters are rejected, which
   prevents header injection from a malformed secret.
-- On injected requests, fullmakt negotiates gzip itself and decodes it, so
+- On injected requests, keyshim negotiates gzip itself and decodes it, so
   the body can be redacted. Responses with any other encoding fail with 502.
 - The audit log records host, method, path (without query), rule, secret
   names and status. Never values.
 - Proxy clients cannot reach loopback, link-local or unspecified addresses
   (403). Without this, a client could use the proxy to reach services on
-  fullmakt's host, including the UI and cloud metadata endpoints. The check
+  keyshim's host, including the UI and cloud metadata endpoints. The check
   runs on the resolved IP, so DNS names that point at loopback are caught
   too. Set `allowLoopbackTargets: true` to turn it off.
 
@@ -106,16 +106,16 @@ Each file has its own key derived from the master key (HKDF). The key ID
 and purpose are authenticated, so encrypted files cannot be swapped for each
 other, and changes to them are detected. A plaintext CA key from an earlier
 version is encrypted automatically on first start. Plaintext secrets files
-are refused; load them with `fullmakt secrets import <file>`.
+are refused; load them with `keyshim secrets import <file>`.
 
 The master key comes from `encryption.key` in the configuration:
 
 - **`keychain`** (default): a random key in the OS keychain (macOS
-  Keychain, Windows Credential Manager, Linux Secret Service). Fullmakt
+  Keychain, Windows Credential Manager, Linux Secret Service). Keyshim
   restarts without prompting while you are logged in. Any process running as
   your user can read it; agents in a VM or container cannot.
 - **`passphrase`**: derived with Argon2id from a passphrase of at least 12
-  characters, read from `FULLMAKT_PASSPHRASE` or asked for in the terminal on
+  characters, read from `KEYSHIM_PASSPHRASE` or asked for in the terminal on
   every start. Use it where no keychain exists, such as headless Linux.
 
 Local values are write-only. The UI and CLI list names and added times, and
@@ -126,14 +126,14 @@ delete it and add it again.
 
 - **Back up anywhere:** `config.yaml`, `key.json`, `secrets.enc`, `ca/`.
   Without the master key they are useless.
-- **Keep in a password manager:** `fullmakt key export` prints a recovery
+- **Keep in a password manager:** `keyshim key export` prints a recovery
   code (keychain mode). With a passphrase, the passphrase is the recovery.
-- **Restore:** copy the files to the new machine and run `fullmakt key import`
+- **Restore:** copy the files to the new machine and run `keyshim key import`
   (keychain mode).
 
 ## Web UI
 
-`fullmakt run` also serves a management UI on `127.0.0.1:8900` and prints a
+`keyshim run` also serves a management UI on `127.0.0.1:8900` and prints a
 single-use login URL:
 
 - **Activity:** live log of connections and requests, with rule and secret
@@ -160,7 +160,7 @@ UI security:
   VM, where the agent could collect them.
 - **Single-use login.** The login URL carries a random 256-bit token in the
   fragment, so it never reaches the server in a request line or log. It
-  works once; after each login fullmakt prints a new URL. Sessions expire
+  works once; after each login keyshim prints a new URL. Sessions expire
   after 12 hours, and Sign out ends one immediately.
 - **Strict request checks.** Requests are rejected unless the `Host` header
   names the UI listener, which blocks DNS rebinding. Changes also need a
@@ -175,20 +175,20 @@ Set `ui.disabled: true` to run without the UI.
 macOS and Linux, amd64 and arm64:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/waldemarsson/fullmakt/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.sh | sh
 ```
 
 The script downloads the release archive for your platform, checks it against
-the release's `SHA256SUMS`, and installs `fullmakt` to `~/.local/bin` without
+the release's `SHA256SUMS`, and installs `keyshim` to `~/.local/bin` without
 sudo. Options, as environment variables:
 
-- `FULLMAKT_VERSION=v0.2.0` installs a specific release instead of the latest.
-- `FULLMAKT_INSTALL_DIR=/path` installs somewhere else.
-- `FULLMAKT_VERIFY_ATTESTATION=1` also verifies the GitHub build provenance
+- `KEYSHIM_VERSION=v0.2.0` installs a specific release instead of the latest.
+- `KEYSHIM_INSTALL_DIR=/path` installs somewhere else.
+- `KEYSHIM_VERIFY_ATTESTATION=1` also verifies the GitHub build provenance
   attestation with `gh attestation verify`.
 
 To read the script before running it, download it first:
-`curl -fsSLO https://raw.githubusercontent.com/waldemarsson/fullmakt/main/install.sh`.
+`curl -fsSLO https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.sh`.
 
 Windows is not supported yet.
 
@@ -197,15 +197,15 @@ Windows is not supported yet.
 Requires Go 1.27+.
 
 ```bash
-go build -o fullmakt ./cmd/fullmakt
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o fullmakt-darwin-arm64 ./cmd/fullmakt
+go build -o keyshim ./cmd/keyshim
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o keyshim-darwin-arm64 ./cmd/keyshim
 go test -race ./...
 ```
 
 ### Releases
 
 Pushing a tag such as `v0.2.0` runs the CI checks, builds
-`fullmakt_<os>_<arch>.tar.gz` for macOS and Linux (amd64, arm64) with
+`keyshim_<os>_<arch>.tar.gz` for macOS and Linux (amd64, arm64) with
 `scripts/build-release.sh`, writes `SHA256SUMS`, attests build provenance
 (public repository only) and publishes a GitHub release. Tags with a hyphen,
 such as `v0.2.0-rc.1`, become pre-releases. Builds are reproducible: the
@@ -214,13 +214,13 @@ same commit and Go version produce identical archives.
 ## Use
 
 ```bash
-mkdir -p ~/.config/fullmakt && chmod 700 ~/.config/fullmakt
-cp config.example.yaml ~/.config/fullmakt/config.yaml
-fullmakt client add agentbox  # proxy credentials for the sandbox, shown once
-fullmakt secrets add github   # asks for the value without echo; or pipe it in
-fullmakt check -resolve       # validate config and fetch every secret (values are never printed)
-fullmakt ca > fullmakt-ca.pem # public CA certificate for the client
-fullmakt run
+mkdir -p ~/.config/keyshim && chmod 700 ~/.config/keyshim
+cp config.example.yaml ~/.config/keyshim/config.yaml
+keyshim client add agentbox  # proxy credentials for the sandbox, shown once
+keyshim secrets add github   # asks for the value without echo; or pipe it in
+keyshim check -resolve       # validate config and fetch every secret (values are never printed)
+keyshim ca > keyshim-ca.pem  # public CA certificate for the client
+keyshim run
 ```
 
 For Azure Key Vault, sign in with `az login` (or use managed or workload
@@ -231,22 +231,22 @@ identity). The identity needs the *Key Vault Secrets User* role on the vault.
 Create a client for each sandbox (or use Setup in the UI):
 
 ```bash
-fullmakt client add agentbox   # prints the token once
+keyshim client add agentbox   # prints the token once
 ```
 
 In the sandbox, set the proxy with the client's credentials and trust the CA:
 
 ```bash
-export HTTPS_PROXY=http://agentbox:<token>@<fullmakt-host>:8899
-export HTTP_PROXY=http://agentbox:<token>@<fullmakt-host>:8899
+export HTTPS_PROXY=http://agentbox:<token>@<keyshim-host>:8899
+export HTTP_PROXY=http://agentbox:<token>@<keyshim-host>:8899
 export NO_PROXY=localhost,127.0.0.1
 
 # Ubuntu system store inside the sandbox; covers curl, git, gh, Go and most CLIs.
-sudo cp fullmakt-ca.pem /usr/local/share/ca-certificates/fullmakt.crt
+sudo cp keyshim-ca.pem /usr/local/share/ca-certificates/keyshim.crt
 sudo update-ca-certificates
 
 # Runtimes with their own trust stores.
-export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/fullmakt.crt
+export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/keyshim.crt
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt   # Python requests
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ```
@@ -267,12 +267,12 @@ and fail authentication, so nothing secret leaks.
 
 ### Lima
 
-Run fullmakt on the Mac and point the VM at `host.lima.internal`. Lima's
+Run keyshim on the Mac and point the VM at `host.lima.internal`. Lima's
 user-mode network is expected to forward that address to the Mac's
 loopback; this is not yet verified.
 
 Lima also forwards ports that the VM listens on to the Mac's `127.0.0.1`.
-Exclude fullmakt's ports, so the agent cannot occupy them while fullmakt is
+Exclude keyshim's ports, so the agent cannot occupy them while keyshim is
 stopped and serve a fake UI:
 
 ```yaml

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fullmakt</title>
+  <title>Keyshim</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="app.css">
   <script src="app.js" defer></script>
@@ -12,7 +12,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="favicon.svg" alt="" width="22" height="22">
-      <span>Fullmakt</span>
+      <span>Keyshim</span>
     </div>
     <nav class="tabs" id="tabs" aria-label="Sections">
       <a href="#activity" data-tab="activity">Activity</a>
@@ -28,7 +28,7 @@
   <main>
     <div class="notice" id="signed-out" hidden>
       <h2>Not signed in</h2>
-      <p>Open the newest login URL that <code>fullmakt run</code> printed in the terminal. Each URL works once; a new one is printed after every login.</p>
+      <p>Open the newest login URL that <code>keyshim run</code> printed in the terminal. Each URL works once; a new one is printed after every login.</p>
     </div>
 
     <section class="panel" id="view-activity" hidden>
@@ -127,7 +127,7 @@
         </div>
         <div class="box">
           <h2>2. Trust the CA</h2>
-          <p>Sandboxes must trust fullmakt's CA for hosts that receive secrets. Trust it <strong>only inside sandboxes</strong>, never on this machine: whoever holds the CA key could intercept HTTPS for everything that trusts it.</p>
+          <p>Sandboxes must trust keyshim's CA for hosts that receive secrets. Trust it <strong>only inside sandboxes</strong>, never on this machine: whoever holds the CA key could intercept HTTPS for everything that trusts it.</p>
           <p><button type="button" class="btn primary" id="download-ca">Download CA certificate</button></p>
           <pre class="code" id="setup-ca"></pre>
         </div>

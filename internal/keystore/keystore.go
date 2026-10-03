@@ -1,4 +1,4 @@
-// Package keystore manages the master key that encrypts fullmakt's data at
+// Package keystore manages the master key that encrypts keyshim's data at
 // rest, and seals and opens data with keys derived from it.
 //
 // The master key lives in the OS keychain (macOS Keychain, Windows Credential
@@ -26,7 +26,7 @@ import (
 	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/argon2"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/keyshim/internal/config"
 )
 
 const (
@@ -37,12 +37,12 @@ const (
 	MinPassphraseLength = 12
 
 	metaFile        = "key.json"
-	keyringService  = "fullmakt"
+	keyringService  = "keyshim"
 	keySize         = 32
-	sealedFormat    = "fullmakt-sealed-v1"
-	recoveryPrefix  = "fullmakt-recovery-v1:"
+	sealedFormat    = "keyshim-sealed-v1"
+	recoveryPrefix  = "keyshim-recovery-v1:"
 	verifierPurpose = "key-check"
-	verifierText    = "fullmakt"
+	verifierText    = "keyshim"
 )
 
 // Argon2id parameters for new passphrase keys; stored in key.json so they can
@@ -125,7 +125,7 @@ func LoadOrCreate(o Options) (*Key, error) {
 	case SourceKeychain:
 		encoded, err := o.keyring().Get(keyringService, m.ID)
 		if errors.Is(err, keyring.ErrNotFound) {
-			return nil, fmt.Errorf("key %s is not in the OS keychain; restore it with `fullmakt key import`", m.ID)
+			return nil, fmt.Errorf("key %s is not in the OS keychain; restore it with `keyshim key import`", m.ID)
 		}
 		if err != nil {
 			return nil, keychainError(err)
@@ -198,7 +198,7 @@ func create(o Options) (*Key, error) {
 }
 
 // RecoveryCode encodes the master key so it can be restored with Import.
-// Anyone holding the code can decrypt fullmakt's data.
+// Anyone holding the code can decrypt keyshim's data.
 func (k *Key) RecoveryCode() string {
 	return recoveryPrefix + base64.RawURLEncoding.EncodeToString(k.master)
 }
@@ -215,7 +215,7 @@ func Import(o Options, code string) error {
 	}
 	encoded, ok := strings.CutPrefix(strings.TrimSpace(code), recoveryPrefix)
 	if !ok {
-		return errors.New("not a fullmakt recovery code")
+		return errors.New("not a keyshim recovery code")
 	}
 	master, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil || len(master) != keySize {
@@ -300,10 +300,10 @@ func (k *Key) Open(purpose string, data []byte) ([]byte, error) {
 
 // ErrNotSealed means data is not in the sealed format, for example a
 // plaintext file from before encryption.
-var ErrNotSealed = errors.New("data is not encrypted by fullmakt")
+var ErrNotSealed = errors.New("data is not encrypted by keyshim")
 
 func (k *Key) aead(purpose string) (cipher.AEAD, error) {
-	sub, err := hkdf.Key(sha256.New, k.master, nil, "fullmakt/v1/"+purpose, keySize)
+	sub, err := hkdf.Key(sha256.New, k.master, nil, "keyshim/v1/"+purpose, keySize)
 	if err != nil {
 		return nil, err
 	}

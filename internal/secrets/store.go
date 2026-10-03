@@ -14,8 +14,8 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
 )
 
 // Provider fetches a secret value from a backend.

@@ -6,7 +6,7 @@ import (
 )
 
 func TestClientTokenFormat(t *testing.T) {
-	format := regexp.MustCompile(`^fm_[A-Za-z0-9]{16}$`)
+	format := regexp.MustCompile(`^ks_[A-Za-z0-9]{16}$`)
 	seen := map[string]bool{}
 	for range 1000 {
 		token := newClientToken()

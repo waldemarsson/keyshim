@@ -1,20 +1,20 @@
-# Copy to ~/.config/fullmakt/config.yaml and adjust.
+# Copy to ~/.config/keyshim/config.yaml and adjust.
 
 # Loopback only by default. Anything that can reach this address can use the
 # configured secrets.
 listen: 127.0.0.1:8899
 
 # CA used for TLS interception. Created on first run; the key never leaves
-# this directory. Default: ~/.config/fullmakt/ca
-# caDir: ~/.config/fullmakt/ca
+# this directory. Default: ~/.config/keyshim/ca
+# caDir: ~/.config/keyshim/ca
 
-# Management UI, loopback only. `fullmakt run` prints a one-time login URL.
+# Management UI, loopback only. `keyshim run` prints a one-time login URL.
 # ui:
 #   listen: 127.0.0.1:8900
 #   disabled: false
 
 # Where the master key that encrypts local secrets and the CA key comes from:
-# keychain (OS keychain, default) or passphrase (FULLMAKT_PASSPHRASE or a
+# keychain (OS keychain, default) or passphrase (KEYSHIM_PASSPHRASE or a
 # terminal prompt). key.json next to this file identifies the key.
 # encryption:
 #   key: keychain
@@ -24,7 +24,7 @@ listen: 127.0.0.1:8899
 # allowLoopbackTargets: false
 
 # Sandboxes allowed to use the proxy; everything else gets 407. Add them with
-# `fullmakt client add <name>` or the UI, which print the token once and
+# `keyshim client add <name>` or the UI, which print the token once and
 # store only its hash here.
 # clients:
 #   - name: agentbox
@@ -32,10 +32,10 @@ listen: 127.0.0.1:8899
 
 providers:
   # File encrypted with the master key. Add values with the UI or
-  # `fullmakt secrets add <name>`; they can never be read back.
+  # `keyshim secrets add <name>`; they can never be read back.
   local:
     type: local
-    file: ~/.config/fullmakt/secrets.enc
+    file: ~/.config/keyshim/secrets.enc
   # Authenticates with DefaultAzureCredential (az login, managed identity,
   # workload identity, environment).
   kv:

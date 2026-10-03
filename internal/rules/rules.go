@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/keyshim/internal/config"
 )
 
 // Getter resolves a secret name to its value.

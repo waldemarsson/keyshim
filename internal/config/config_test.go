@@ -19,7 +19,7 @@ func writeConfig(t *testing.T, content string) string {
 }
 
 const validConfig = `
-caDir: /tmp/fullmakt-ca
+caDir: /tmp/keyshim-ca
 providers:
   local: {type: local, file: ~/secrets.yaml}
   kv: {type: azure-keyvault, vaultUri: https://kv.vault.azure.net}
@@ -112,7 +112,7 @@ func TestClients(t *testing.T) {
 }
 
 func TestRuleClientsMayNotExistYet(t *testing.T) {
-	hash := HashToken("fm_token")
+	hash := HashToken("ks_token")
 	base := "clients:\n  - {name: agentbox, tokenHash: " + hash + "}\nrules:\n  - {host: a.com, clients: [%s], inject: [{header: A, value: x}]}\n"
 	cfg, err := Load(writeConfig(t, fmt.Sprintf(base, "agentbox")))
 	if err != nil || len(cfg.Warnings()) != 0 {

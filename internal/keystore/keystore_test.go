@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waldemarsson/fullmakt/internal/keystore"
-	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
+	"github.com/waldemarsson/keyshim/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/keystore/keystoretest"
 )
 
 func keychainOptions(dir string, kr keystore.Keyring) keystore.Options {
@@ -48,7 +48,7 @@ func TestKeychainKeySurvivesRestart(t *testing.T) {
 	}
 
 	meta, _ := os.ReadFile(filepath.Join(dir, "key.json"))
-	stored, _ := kr.Get("fullmakt", first.ID())
+	stored, _ := kr.Get("keyshim", first.ID())
 	if stored == "" || bytes.Contains(meta, []byte(stored)) {
 		t.Error("key.json contains the key, or the keychain is empty")
 	}
@@ -62,13 +62,13 @@ func TestMissingKeychainItem(t *testing.T) {
 	}
 	code := key.RecoveryCode()
 
-	kr.Delete("fullmakt", key.ID())
+	kr.Delete("keyshim", key.ID())
 	_, err = keystore.LoadOrCreate(keychainOptions(dir, kr))
-	if err == nil || !strings.Contains(err.Error(), "fullmakt key import") {
+	if err == nil || !strings.Contains(err.Error(), "keyshim key import") {
 		t.Fatalf("err = %v, want hint to import", err)
 	}
 
-	if err := keystore.Import(keychainOptions(dir, kr), "fullmakt-recovery-v1:AAAA"); err == nil {
+	if err := keystore.Import(keychainOptions(dir, kr), "keyshim-recovery-v1:AAAA"); err == nil {
 		t.Error("malformed code accepted")
 	}
 	other := keystoretest.NewKey(t).RecoveryCode()

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on fullmakt. The README describes the
+Guidance for coding agents working on keyshim. The README describes the
 product and its security model; read its "Security model" section before
 changing the proxy, storage or UI.
 
@@ -26,7 +26,7 @@ committing.
 
 | Path | Owns |
 |---|---|
-| `cmd/fullmakt` | CLI: `run`, `check`, `ca`, `client`, `secrets`, `key`, `version` |
+| `cmd/keyshim` | CLI: `run`, `check`, `ca`, `client`, `secrets`, `key`, `version` |
 | `internal/config` | YAML config, defaults, validation, warnings, atomic writes |
 | `internal/keystore` | Master key (OS keychain or passphrase), `Seal`/`Open`; `keystoretest` for tests |
 | `internal/secrets` | Providers (encrypted local file, Azure Key Vault) and the TTL cache |
@@ -45,7 +45,7 @@ Changes must keep all of these. Add or update a test when touching one.
 
 - Secret values never appear in logs, error messages, audit events, API
   responses or the UI. Errors name secrets, never their values.
-- Secrets are injected only into headers, only over TLS fullmakt verifies,
+- Secrets are injected only into headers, only over TLS keyshim verifies,
   and only for requests a rule matches (host, port, method, path, client).
 - The `Host` header must match the CONNECT target; ambiguous paths never
   match path rules; wildcards cannot cover public suffixes.
@@ -58,7 +58,7 @@ Changes must keep all of these. Add or update a test when touching one.
   `textContent`/the `h()` helper, never `innerHTML`; request paths in the
   activity log come from untrusted clients. Keep the strict CSP: no inline
   scripts or styles.
-- Config and key files written by fullmakt are `0600`; files that others can
+- Config and key files written by keyshim are `0600`; files that others can
   write are refused.
 
 ## Conventions

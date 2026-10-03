@@ -26,11 +26,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/app"
-	"github.com/waldemarsson/fullmakt/internal/audit"
-	"github.com/waldemarsson/fullmakt/internal/ca"
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/secrets"
+	"github.com/waldemarsson/keyshim/internal/app"
+	"github.com/waldemarsson/keyshim/internal/audit"
+	"github.com/waldemarsson/keyshim/internal/ca"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/secrets"
 )
 
 //go:embed static
@@ -38,7 +38,7 @@ var staticFiles embed.FS
 
 const (
 	sessionLifetime = 12 * time.Hour
-	requestHeader   = "X-Fullmakt-Request"
+	requestHeader   = "X-Keyshim-Request"
 	maxBodyBytes    = 1 << 20
 	checkTimeout    = 30 * time.Second
 	streamKeepWarm  = 25 * time.Second
@@ -156,19 +156,19 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 
 		if !s.allowedHosts[r.Host] {
-			http.Error(w, "fullmakt: unexpected Host header", http.StatusMisdirectedRequest)
+			http.Error(w, "keyshim: unexpected Host header", http.StatusMisdirectedRequest)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			// Cross-site requests cannot set a custom header without a CORS
 			// preflight, which this server never approves.
 			if r.Header.Get("Origin") != "http://"+r.Host || r.Header.Get(requestHeader) != "1" {
-				http.Error(w, "fullmakt: cross-origin request refused", http.StatusForbidden)
+				http.Error(w, "keyshim: cross-origin request refused", http.StatusForbidden)
 				return
 			}
 		}
 		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
-			http.Error(w, "fullmakt: cross-site request refused", http.StatusForbidden)
+			http.Error(w, "keyshim: cross-site request refused", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -189,7 +189,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.token)) != 1 {
 		s.mu.Unlock()
-		writeError(w, http.StatusForbidden, errors.New("invalid or already used login token; use the newest URL printed by fullmakt"))
+		writeError(w, http.StatusForbidden, errors.New("invalid or already used login token; use the newest URL printed by keyshim"))
 		return
 	}
 	s.token = randomHex(32)
@@ -272,7 +272,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) caCert(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", `attachment; filename="fullmakt-ca.pem"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="keyshim-ca.pem"`)
 	_, _ = w.Write(s.opts.CA.CertPEM())
 }
 

@@ -1,4 +1,4 @@
-// Package config loads and validates the fullmakt configuration file.
+// Package config loads and validates the keyshim configuration file.
 package config
 
 import (
@@ -167,13 +167,13 @@ var forbiddenHeaders = map[string]bool{
 	"proxy-authorization": true,
 }
 
-// DefaultDir returns ~/.config/fullmakt.
+// DefaultDir returns ~/.config/keyshim.
 func DefaultDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "fullmakt"), nil
+	return filepath.Join(home, ".config", "keyshim"), nil
 }
 
 // Load reads, defaults and validates the configuration at path.
@@ -215,7 +215,7 @@ func Save(path string, c *Config) error {
 	if err != nil {
 		return err
 	}
-	header := []byte("# Written by fullmakt. Comments are not preserved when the UI saves changes.\n")
+	header := []byte("# Written by keyshim. Comments are not preserved when the UI saves changes.\n")
 	return WriteFileAtomic(path, append(header, data...), 0o600)
 }
 

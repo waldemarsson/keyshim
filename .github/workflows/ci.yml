@@ -72,5 +72,5 @@ jobs:
       - name: Release build and install script
         run: |
           scripts/build-release.sh v0.0.0-ci dist
-          FULLMAKT_BASE_URL="file://$PWD/dist" FULLMAKT_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
-          "$RUNNER_TEMP/bin/fullmakt" version | grep -qx v0.0.0-ci
+          KEYSHIM_BASE_URL="file://$PWD/dist" KEYSHIM_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/keyshim" version | grep -qx v0.0.0-ci

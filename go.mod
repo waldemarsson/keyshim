@@ -1,4 +1,4 @@
-module github.com/waldemarsson/fullmakt
+module github.com/waldemarsson/keyshim
 
 go 1.27.1
 

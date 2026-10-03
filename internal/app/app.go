@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
-	"github.com/waldemarsson/fullmakt/internal/rules"
-	"github.com/waldemarsson/fullmakt/internal/secrets"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/rules"
+	"github.com/waldemarsson/keyshim/internal/secrets"
 )
 
 // Runtime is what a configuration compiles to.
@@ -113,7 +113,7 @@ func (a *App) Reload() error {
 	if cfg.Listen != a.cfg.Listen || cfg.UI != a.cfg.UI || cfg.CADir != a.cfg.CADir ||
 		cfg.AllowNonLoopback != a.cfg.AllowNonLoopback || cfg.AllowLoopbackTargets != a.cfg.AllowLoopbackTargets ||
 		cfg.Encryption != a.cfg.Encryption {
-		return errors.New("listen, ui, caDir, encryption and allow* settings changed; restart fullmakt to apply them")
+		return errors.New("listen, ui, caDir, encryption and allow* settings changed; restart keyshim to apply them")
 	}
 	rt, err := Build(cfg, a.key)
 	if err != nil {
@@ -196,12 +196,12 @@ func (a *App) change(edit func(*config.Config) error) error {
 }
 
 const (
-	tokenPrefix   = "fm_"
+	tokenPrefix   = "ks_"
 	tokenLength   = 16 // random characters; about 95 bits
 	tokenAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 )
 
-// newClientToken returns "fm_" plus 16 random base62 characters. The prefix
+// newClientToken returns "ks_" plus 16 random base62 characters. The prefix
 // lets secret scanners and people recognise the value.
 func newClientToken() string {
 	out := make([]byte, 0, len(tokenPrefix)+tokenLength)

@@ -1,4 +1,4 @@
-// Command fullmakt runs a local HTTP proxy that injects secrets into
+// Command keyshim runs a local HTTP proxy that injects secrets into
 // matching HTTPS requests, so the client never holds the secret values.
 package main
 
@@ -16,19 +16,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/app"
-	"github.com/waldemarsson/fullmakt/internal/audit"
-	"github.com/waldemarsson/fullmakt/internal/ca"
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
-	"github.com/waldemarsson/fullmakt/internal/proxy"
-	"github.com/waldemarsson/fullmakt/internal/ui"
+	"github.com/waldemarsson/keyshim/internal/app"
+	"github.com/waldemarsson/keyshim/internal/audit"
+	"github.com/waldemarsson/keyshim/internal/ca"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/proxy"
+	"github.com/waldemarsson/keyshim/internal/ui"
 	"golang.org/x/term"
 )
 
 var version = "dev"
 
-const usage = `Usage: fullmakt <command> [flags]
+const usage = `Usage: keyshim <command> [flags]
 
 Commands:
   run      Start the proxy
@@ -41,9 +41,9 @@ Commands:
 
 The master key comes from the OS keychain, or from a passphrase when the
 configuration sets encryption.key: passphrase. The passphrase is read from
-FULLMAKT_PASSPHRASE or asked for in the terminal.
+KEYSHIM_PASSPHRASE or asked for in the terminal.
 
-Run "fullmakt <command> -h" for command flags.
+Run "keyshim <command> -h" for command flags.
 `
 
 func main() {
@@ -70,12 +70,12 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "fullmakt: unknown command %q\n\n%s", os.Args[1], usage)
+		fmt.Fprintf(os.Stderr, "keyshim: unknown command %q\n\n%s", os.Args[1], usage)
 		os.Exit(2)
 	}
 	if err != nil {
 		if !errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(os.Stderr, "fullmakt:", err)
+			fmt.Fprintln(os.Stderr, "keyshim:", err)
 		}
 		os.Exit(1)
 	}
@@ -125,19 +125,19 @@ func unlock(path string, cfg *config.Config) (*keystore.Key, error) {
 	return key, nil
 }
 
-// promptPassphrase reads FULLMAKT_PASSPHRASE, or asks in the terminal without
+// promptPassphrase reads KEYSHIM_PASSPHRASE, or asks in the terminal without
 // echo. A new key asks twice.
 func promptPassphrase(confirm bool) (string, error) {
-	if p, ok := os.LookupEnv("FULLMAKT_PASSPHRASE"); ok {
+	if p, ok := os.LookupEnv("KEYSHIM_PASSPHRASE"); ok {
 		// Child processes, such as the az CLI that the Azure credential
 		// runs, must not inherit it.
-		os.Unsetenv("FULLMAKT_PASSPHRASE")
+		os.Unsetenv("KEYSHIM_PASSPHRASE")
 		return p, nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", errors.New("no passphrase: set FULLMAKT_PASSPHRASE or run in a terminal")
+		return "", errors.New("no passphrase: set KEYSHIM_PASSPHRASE or run in a terminal")
 	}
-	first, err := readHidden("fullmakt passphrase: ")
+	first, err := readHidden("keyshim passphrase: ")
 	if err != nil || !confirm {
 		return first, err
 	}
@@ -210,13 +210,13 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("fullmakt listening", "addr", proxyAddr.String(), "ca", authority.CertPath(),
+	logger.Info("keyshim listening", "addr", proxyAddr.String(), "ca", authority.CertPath(),
 		"rules", len(cfg.Rules), "secrets", len(cfg.Secrets), "clients", len(cfg.Clients), "version", version)
 	for _, w := range cfg.Warnings() {
 		logger.Warn(w)
 	}
 	if len(cfg.Clients) == 0 {
-		logger.Warn("no proxy clients configured; every proxy request is refused until you add one with `fullmakt client add <name>` or the UI")
+		logger.Warn("no proxy clients configured; every proxy request is refused until you add one with `keyshim client add <name>` or the UI")
 	}
 
 	if !cfg.UI.Disabled {
@@ -229,7 +229,7 @@ func runCmd(args []string) error {
 			Version:     version,
 			Logger:      logger,
 			OnLoginURL: func(url string) {
-				fmt.Fprintf(os.Stderr, "\nOpen the fullmakt UI (single-use link; a new one is printed after each login):\n  %s\n\n", url)
+				fmt.Fprintf(os.Stderr, "\nOpen the keyshim UI (single-use link; a new one is printed after each login):\n  %s\n\n", url)
 			},
 		})
 		if err != nil {

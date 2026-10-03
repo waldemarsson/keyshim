@@ -1,42 +1,42 @@
 #!/bin/sh
-# Install fullmakt from GitHub releases.
+# Install keyshim from GitHub releases.
 #
-#   curl -fsSL https://raw.githubusercontent.com/waldemarsson/fullmakt/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.sh | sh
 #
 # Environment:
-#   FULLMAKT_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
-#   FULLMAKT_INSTALL_DIR  target directory (default: ~/.local/bin; no sudo needed)
-#   FULLMAKT_VERIFY_ATTESTATION=1
+#   KEYSHIM_VERSION      release tag to install, e.g. v0.2.0 (default: latest)
+#   KEYSHIM_INSTALL_DIR  target directory (default: ~/.local/bin; no sudo needed)
+#   KEYSHIM_VERIFY_ATTESTATION=1
 #                         also verify the GitHub build provenance attestation
 #                         with `gh attestation verify` (requires the gh CLI)
-#   FULLMAKT_BASE_URL     download from another location; for mirrors and tests
+#   KEYSHIM_BASE_URL     download from another location; for mirrors and tests
 #
 # The archive is always checked against the release's SHA256SUMS.
 set -eu
 
-repo="waldemarsson/fullmakt"
-version="${FULLMAKT_VERSION:-latest}"
-install_dir="${FULLMAKT_INSTALL_DIR:-$HOME/.local/bin}"
+repo="waldemarsson/keyshim"
+version="${KEYSHIM_VERSION:-latest}"
+install_dir="${KEYSHIM_INSTALL_DIR:-$HOME/.local/bin}"
 
 fail() {
-  echo "fullmakt install: $*" >&2
+  echo "keyshim install: $*" >&2
   exit 1
 }
 
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux) os=linux ;;
-  *) fail "unsupported OS $(uname -s); fullmakt supports macOS and Linux" ;;
+  *) fail "unsupported OS $(uname -s); keyshim supports macOS and Linux" ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
   arm64 | aarch64) arch=arm64 ;;
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
-asset="fullmakt_${os}_${arch}.tar.gz"
+asset="keyshim_${os}_${arch}.tar.gz"
 
-if [ -n "${FULLMAKT_BASE_URL:-}" ]; then
-  base_url=$FULLMAKT_BASE_URL
+if [ -n "${KEYSHIM_BASE_URL:-}" ]; then
+  base_url=$KEYSHIM_BASE_URL
   curl_proto=""
 elif [ "$version" = latest ]; then
   base_url="https://github.com/$repo/releases/latest/download"
@@ -80,21 +80,21 @@ actual=$(sha256 "$tmp/$asset")
 [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset (expected $expected, got $actual)"
 echo "Checksum verified"
 
-if [ "${FULLMAKT_VERIFY_ATTESTATION:-0}" = 1 ]; then
-  command -v gh >/dev/null 2>&1 || fail "FULLMAKT_VERIFY_ATTESTATION=1 needs the gh CLI"
+if [ "${KEYSHIM_VERIFY_ATTESTATION:-0}" = 1 ]; then
+  command -v gh >/dev/null 2>&1 || fail "KEYSHIM_VERIFY_ATTESTATION=1 needs the gh CLI"
   gh attestation verify "$tmp/$asset" --repo "$repo" >/dev/null || fail "attestation verification failed for $asset"
   echo "Build provenance attestation verified"
 fi
 
-tar -xzf "$tmp/$asset" -C "$tmp" ./fullmakt
+tar -xzf "$tmp/$asset" -C "$tmp" ./keyshim
 mkdir -p "$install_dir"
 # Install through a temporary name so a running binary is replaced atomically.
-cp "$tmp/fullmakt" "$install_dir/.fullmakt.new"
-chmod 0755 "$install_dir/.fullmakt.new"
-mv -f "$install_dir/.fullmakt.new" "$install_dir/fullmakt"
+cp "$tmp/keyshim" "$install_dir/.keyshim.new"
+chmod 0755 "$install_dir/.keyshim.new"
+mv -f "$install_dir/.keyshim.new" "$install_dir/keyshim"
 
-echo "Installed $("$install_dir/fullmakt" version) to $install_dir/fullmakt"
+echo "Installed $("$install_dir/keyshim" version) to $install_dir/keyshim"
 case ":$PATH:" in
   *":$install_dir:"*) ;;
-  *) echo "Add $install_dir to your PATH to run fullmakt directly." ;;
+  *) echo "Add $install_dir to your PATH to run keyshim directly." ;;
 esac

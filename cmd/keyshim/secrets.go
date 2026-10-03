@@ -12,13 +12,13 @@ import (
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/term"
 
-	"github.com/waldemarsson/fullmakt/internal/app"
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
-	"github.com/waldemarsson/fullmakt/internal/secrets"
+	"github.com/waldemarsson/keyshim/internal/app"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/secrets"
 )
 
-const secretsUsage = `Usage: fullmakt secrets <command> [flags]
+const secretsUsage = `Usage: keyshim secrets <command> [flags]
 
 Commands:
   list               List stored names and when they were added
@@ -159,7 +159,7 @@ func readValue(prompt string) (string, error) {
 	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), nil
 }
 
-const keyUsage = `Usage: fullmakt key <command> [-config path]
+const keyUsage = `Usage: keyshim key <command> [-config path]
 
 Commands:
   export   Print a recovery code for the master key
@@ -190,7 +190,7 @@ func keyCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stderr, "Store this recovery code in a password manager. It decrypts all fullmakt data.")
+		fmt.Fprintln(os.Stderr, "Store this recovery code in a password manager. It decrypts all keyshim data.")
 		fmt.Println(key.RecoveryCode())
 		return nil
 
@@ -211,7 +211,7 @@ func keyCmd(args []string) error {
 	}
 }
 
-const clientUsage = `Usage: fullmakt client <command> [-config path]
+const clientUsage = `Usage: keyshim client <command> [-config path]
 
 Commands:
   list            List clients
@@ -255,7 +255,7 @@ func clientCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stderr, "Token for "+name+" (shown once; a running fullmakt picks it up after `Reload file from disk` or a restart):")
+		fmt.Fprintln(os.Stderr, "Token for "+name+" (shown once; a running keyshim picks it up after `Reload file from disk` or a restart):")
 		fmt.Println(token)
 		fmt.Fprintf(os.Stderr, "Use: HTTPS_PROXY=http://%s:<token>@<host>:%s\n", name, portOf(cfg.Listen))
 		return nil
@@ -267,7 +267,7 @@ func clientCmd(args []string) error {
 		if err := application.DeleteClient(name); err != nil {
 			return err
 		}
-		fmt.Printf("deleted client %s (a running fullmakt applies this after a reload or restart)\n", name)
+		fmt.Printf("deleted client %s (a running keyshim applies this after a reload or restart)\n", name)
 		return nil
 	default:
 		fmt.Fprint(os.Stderr, clientUsage)
