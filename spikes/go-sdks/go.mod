@@ -1,4 +1,4 @@
-module github.com/waldemarsson/fullmakt/spikes/go-sdks
+module github.com/waldemarsson/keyshim/spikes/go-sdks
 
 go 1.27.1
 

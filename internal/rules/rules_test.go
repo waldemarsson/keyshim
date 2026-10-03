@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/keyshim/internal/config"
 )
 
 func knownSecrets(names ...string) func(string) bool {

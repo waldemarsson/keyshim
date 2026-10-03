@@ -7,7 +7,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/waldemarsson/fullmakt/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/keystore"
 )
 
 // Keyring is an in-memory keystore.Keyring.

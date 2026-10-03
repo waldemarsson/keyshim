@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
+	"github.com/waldemarsson/keyshim/internal/keystore/keystoretest"
 )
 
 func names(entries []Entry) []string {
@@ -119,7 +119,7 @@ func TestLocalRejectsPlaintextAndOpenPermissions(t *testing.T) {
 	}
 	l := NewLocal(path, keystoretest.NewKey(t))
 	_, err := l.Fetch(context.Background(), "token", "")
-	if err == nil || !strings.Contains(err.Error(), "fullmakt secrets import") || strings.Contains(err.Error(), "abc123") {
+	if err == nil || !strings.Contains(err.Error(), "keyshim secrets import") || strings.Contains(err.Error(), "abc123") {
 		t.Errorf("plaintext file: err = %v", err)
 	}
 	if err := os.Chmod(path, 0o644); err != nil {

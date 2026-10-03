@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/keyshim/internal/config"
 )
 
 type countingProvider struct {

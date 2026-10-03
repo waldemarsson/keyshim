@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
+	"github.com/waldemarsson/keyshim/internal/keystore/keystoretest"
 )
 
 func TestLoadOrCreate(t *testing.T) {

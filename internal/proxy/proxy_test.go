@@ -21,11 +21,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/waldemarsson/fullmakt/internal/audit"
-	"github.com/waldemarsson/fullmakt/internal/ca"
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
-	"github.com/waldemarsson/fullmakt/internal/rules"
+	"github.com/waldemarsson/keyshim/internal/audit"
+	"github.com/waldemarsson/keyshim/internal/ca"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore/keystoretest"
+	"github.com/waldemarsson/keyshim/internal/rules"
 )
 
 const (
@@ -132,7 +132,7 @@ func newFixture(t *testing.T) *fixture {
 	proxyURL := *f.proxyURL
 	proxyURL.User = url.UserPassword(testClient, testClientToken)
 
-	// The client trusts the fullmakt CA (intercepted host) and the other
+	// The client trusts the keyshim CA (intercepted host) and the other
 	// upstream's own certificate (tunneled host).
 	clientRoots := x509.NewCertPool()
 	clientRoots.AppendCertsFromPEM(authority.CertPEM())

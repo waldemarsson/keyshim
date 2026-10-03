@@ -21,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/audit"
-	"github.com/waldemarsson/fullmakt/internal/ca"
-	"github.com/waldemarsson/fullmakt/internal/rules"
+	"github.com/waldemarsson/keyshim/internal/audit"
+	"github.com/waldemarsson/keyshim/internal/ca"
+	"github.com/waldemarsson/keyshim/internal/rules"
 )
 
 const (
@@ -177,8 +177,8 @@ func (p *Proxy) requireClient(w http.ResponseWriter, r *http.Request, ev audit.E
 	}
 	ev.Status, ev.Rejected = http.StatusProxyAuthRequired, "missing or invalid client credentials"
 	p.record(ev)
-	w.Header().Set("Proxy-Authenticate", `Basic realm="fullmakt"`)
-	http.Error(w, "fullmakt: proxy credentials required; set HTTPS_PROXY=http://<client>:<token>@host:port", http.StatusProxyAuthRequired)
+	w.Header().Set("Proxy-Authenticate", `Basic realm="keyshim"`)
+	http.Error(w, "keyshim: proxy credentials required; set HTTPS_PROXY=http://<client>:<token>@host:port", http.StatusProxyAuthRequired)
 	return "", false
 }
 
@@ -198,14 +198,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.IsAbs() && r.URL.Scheme == "http":
 		p.forwardPlain(w, r)
 	default:
-		http.Error(w, "fullmakt: not a proxy request", http.StatusBadRequest)
+		http.Error(w, "keyshim: not a proxy request", http.StatusBadRequest)
 	}
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
-		http.Error(w, "fullmakt: invalid CONNECT target", http.StatusBadRequest)
+		http.Error(w, "keyshim: invalid CONNECT target", http.StatusBadRequest)
 		return
 	}
 	host = rules.NormalizeHost(host)
@@ -237,7 +237,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		ev.Status = status
 		p.record(ev)
-		http.Error(w, "fullmakt: cannot connect to target", status)
+		http.Error(w, "keyshim: cannot connect to target", status)
 		return
 	}
 
@@ -246,7 +246,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if !intercept {
 			upstream.Close()
 		}
-		http.Error(w, "fullmakt: hijack not supported", http.StatusInternalServerError)
+		http.Error(w, "keyshim: hijack not supported", http.StatusInternalServerError)
 		return
 	}
 	// The server may have set deadlines while reading the CONNECT request.
@@ -310,7 +310,7 @@ func (p *Proxy) interceptedHandler(host, port, client string) http.Handler {
 		// tenant based on the Host header.
 		if !sameAuthority(r.Host, host, port) {
 			ev.Rejected = "host header " + r.Host + " does not match CONNECT target"
-			http.Error(rec, "fullmakt: Host header does not match CONNECT target", http.StatusMisdirectedRequest)
+			http.Error(rec, "keyshim: Host header does not match CONNECT target", http.StatusMisdirectedRequest)
 			return
 		}
 
@@ -320,19 +320,19 @@ func (p *Proxy) interceptedHandler(host, port, client string) http.Handler {
 			ev.Rule = rule.Name
 			if isUpgrade(r) {
 				ev.Rejected = "protocol upgrade"
-				http.Error(rec, "fullmakt: protocol upgrades cannot receive secrets", http.StatusForbidden)
+				http.Error(rec, "keyshim: protocol upgrades cannot receive secrets", http.StatusForbidden)
 				return
 			}
 			// TRACE echoes the request, including injected headers.
 			if r.Method == http.MethodTrace {
 				ev.Rejected = "TRACE"
-				http.Error(rec, "fullmakt: TRACE cannot receive secrets", http.StatusForbidden)
+				http.Error(rec, "keyshim: TRACE cannot receive secrets", http.StatusForbidden)
 				return
 			}
 			var err error
 			if inj, err = rule.Render(r.Context(), st.secrets); err != nil {
 				ev.Error = err.Error()
-				http.Error(rec, "fullmakt: secret unavailable", http.StatusBadGateway)
+				http.Error(rec, "keyshim: secret unavailable", http.StatusBadGateway)
 				return
 			}
 			ev.Secrets = inj.Secrets
@@ -401,7 +401,7 @@ func upstreamError(ev *audit.Event) func(http.ResponseWriter, *http.Request, err
 		if !errors.Is(err, context.Canceled) {
 			ev.Error = err.Error()
 		}
-		http.Error(w, "fullmakt: upstream request failed", status)
+		http.Error(w, "keyshim: upstream request failed", status)
 	}
 }
 

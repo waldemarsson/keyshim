@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore"
 )
 
 // localPurpose binds the encrypted file to its use, so it cannot be swapped
@@ -184,7 +184,7 @@ func (l *Local) read() (*localFile, error) {
 	}
 	plain, err := l.key.Open(localPurpose, data)
 	if errors.Is(err, keystore.ErrNotSealed) {
-		return nil, fmt.Errorf("%s is not encrypted; move it aside and load it with `fullmakt secrets import`", l.path)
+		return nil, fmt.Errorf("%s is not encrypted; move it aside and load it with `keyshim secrets import`", l.path)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", l.path, err)

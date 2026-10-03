@@ -45,7 +45,7 @@ function h(tag, props, ...children) {
 // including the port, and sent as a bearer header. Cookies are avoided
 // because browsers send them to every port on 127.0.0.1, including ports a
 // VM forwards to this machine.
-const SESSION_KEY = "fullmakt.session";
+const SESSION_KEY = "keyshim.session";
 
 function loadSession() {
   try {
@@ -75,7 +75,7 @@ async function loginFromFragment() {
   history.replaceState(null, "", location.pathname + "#activity");
   const res = await fetch("/api/session", {
     method: "POST",
-    headers: { "X-Fullmakt-Request": "1", "Content-Type": "application/json" },
+    headers: { "X-Keyshim-Request": "1", "Content-Type": "application/json" },
     body: JSON.stringify({ token: match[1] }),
   });
   if (!res.ok) {
@@ -102,7 +102,7 @@ class ApiError extends Error {
 }
 
 async function api(method, path, body) {
-  const options = { method, headers: { "X-Fullmakt-Request": "1", ...authHeaders() } };
+  const options = { method, headers: { "X-Keyshim-Request": "1", ...authHeaders() } };
   if (body !== undefined) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
@@ -883,10 +883,10 @@ function renderProviders() {
 }
 
 function providerDialog(original) {
-  const p = original ? state.config.providers[original] : { type: "local", file: "~/.config/fullmakt/secrets.enc", vaultUri: "" };
+  const p = original ? state.config.providers[original] : { type: "local", file: "~/.config/keyshim/secrets.enc", vaultUri: "" };
   const name = textInput(original, { placeholder: "kv" });
   const type = select(PROVIDER_TYPES, p.type);
-  const file = textInput(p.file, { placeholder: "~/.config/fullmakt/secrets.enc" });
+  const file = textInput(p.file, { placeholder: "~/.config/keyshim/secrets.enc" });
   const vault = textInput(p.vaultUri, { placeholder: "https://my-vault.vault.azure.net" });
   const fileField = field("File", file, "Encrypted with the master key. Created with mode 600 when you add the first value.");
   const vaultField = field("Vault URI", vault, "Signs in with DefaultAzureCredential, for example `az login`. Needs the Key Vault Secrets User role.");
@@ -1035,7 +1035,7 @@ function renderSetup() {
     $("#setup-ca"),
     [
       "# Inside the sandbox (Ubuntu / Debian)",
-      "sudo cp fullmakt-ca.pem /usr/local/share/ca-certificates/fullmakt.crt",
+      "sudo cp keyshim-ca.pem /usr/local/share/ca-certificates/keyshim.crt",
       "sudo update-ca-certificates",
     ].join("\n"),
   );
@@ -1049,7 +1049,7 @@ function renderSetup() {
       "export NO_PROXY=localhost,127.0.0.1",
       "",
       "# Runtimes with their own trust stores",
-      "export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/fullmakt.crt",
+      "export NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/keyshim.crt",
       "export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt",
       "export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
       "",
@@ -1143,7 +1143,7 @@ async function downloadCA() {
     return;
   }
   const url = URL.createObjectURL(await res.blob());
-  const a = h("a", { href: url, download: "fullmakt-ca.pem" });
+  const a = h("a", { href: url, download: "keyshim-ca.pem" });
   document.body.append(a);
   a.click();
   a.remove();

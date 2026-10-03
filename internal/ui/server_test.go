@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waldemarsson/fullmakt/internal/app"
-	"github.com/waldemarsson/fullmakt/internal/audit"
-	"github.com/waldemarsson/fullmakt/internal/ca"
-	"github.com/waldemarsson/fullmakt/internal/config"
-	"github.com/waldemarsson/fullmakt/internal/keystore/keystoretest"
-	"github.com/waldemarsson/fullmakt/internal/secrets"
+	"github.com/waldemarsson/keyshim/internal/app"
+	"github.com/waldemarsson/keyshim/internal/audit"
+	"github.com/waldemarsson/keyshim/internal/ca"
+	"github.com/waldemarsson/keyshim/internal/config"
+	"github.com/waldemarsson/keyshim/internal/keystore/keystoretest"
+	"github.com/waldemarsson/keyshim/internal/secrets"
 )
 
 const storedValue = "very-secret-local-value"
@@ -153,7 +153,7 @@ func TestLoginRequired(t *testing.T) {
 		t.Errorf("bad token: status = %d, want 403", resp.StatusCode)
 	}
 	resp, body := h.do(t, http.DefaultClient, "GET", "/", "", nil)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Fullmakt") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Keyshim") {
 		t.Errorf("static page: status = %d", resp.StatusCode)
 	}
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
@@ -311,7 +311,7 @@ func TestClients(t *testing.T) {
 	client := h.login(t)
 	resp, body := h.do(t, client, "POST", "/api/clients", `{"name":"agentbox"}`, nil)
 	var created struct{ Name, Token string }
-	if err := json.Unmarshal([]byte(body), &created); err != nil || resp.StatusCode != http.StatusOK || !regexp.MustCompile(`^fm_[A-Za-z0-9]{16}$`).MatchString(created.Token) {
+	if err := json.Unmarshal([]byte(body), &created); err != nil || resp.StatusCode != http.StatusOK || !regexp.MustCompile(`^ks_[A-Za-z0-9]{16}$`).MatchString(created.Token) {
 		t.Fatalf("add client: status %d body %s", resp.StatusCode, body)
 	}
 	if resp, _ := h.do(t, client, "POST", "/api/clients", `{"name":"agentbox"}`, nil); resp.StatusCode != http.StatusBadRequest {
