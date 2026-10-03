@@ -164,6 +164,28 @@ UI security:
 
 Set `ui.disabled: true` to run without the UI.
 
+## Install
+
+macOS and Linux, amd64 and arm64:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/waldemarsson/fullmakt/main/install.sh | sh
+```
+
+The script downloads the release archive for your platform, checks it against
+the release's `SHA256SUMS`, and installs `fullmakt` to `~/.local/bin` without
+sudo. Options, as environment variables:
+
+- `FULLMAKT_VERSION=v0.2.0` installs a specific release instead of the latest.
+- `FULLMAKT_INSTALL_DIR=/path` installs somewhere else.
+- `FULLMAKT_VERIFY_ATTESTATION=1` also verifies the GitHub build provenance
+  attestation with `gh attestation verify`.
+
+To read the script before running it, download it first:
+`curl -fsSLO https://raw.githubusercontent.com/waldemarsson/fullmakt/main/install.sh`.
+
+Windows is not supported yet.
+
 ## Build
 
 Requires Go 1.27+.
@@ -173,6 +195,15 @@ go build -o fullmakt ./cmd/fullmakt
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o fullmakt-darwin-arm64 ./cmd/fullmakt
 go test -race ./...
 ```
+
+### Releases
+
+Pushing a tag such as `v0.2.0` runs the CI checks, builds
+`fullmakt_<os>_<arch>.tar.gz` for macOS and Linux (amd64, arm64) with
+`scripts/build-release.sh`, writes `SHA256SUMS`, attests build provenance
+(public repository only) and publishes a GitHub release. Tags with a hyphen,
+such as `v0.2.0-rc.1`, become pre-releases. Builds are reproducible: the
+same commit and Go version produce identical archives.
 
 ## Use
 
