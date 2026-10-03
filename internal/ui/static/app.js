@@ -180,7 +180,7 @@ function setSignedOut() {
 function showTab() {
   const requested = location.hash.slice(1);
   const tab = TABS.includes(requested) ? requested : "activity";
-  for (const t of TABS) $("#" + t).hidden = state.signedOut || t !== tab;
+  for (const t of TABS) $("#view-" + t).hidden = state.signedOut || t !== tab;
   for (const a of document.querySelectorAll("#tabs a")) {
     a.classList.toggle("active", a.dataset.tab === tab);
     a.toggleAttribute("aria-current", a.dataset.tab === tab);
@@ -202,11 +202,40 @@ function renderStatus() {
 
 function renderAll() {
   renderStatus();
+  renderAttention();
+  renderClientFilter();
   renderActivity();
   renderSecrets();
   renderRules();
   renderProviders();
   renderSetup();
+}
+
+// Collects problems from status, secrets, rules and clients so they are
+// visible without visiting every tab.
+function renderAttention() {
+  const items = [];
+  const link = (text, tab) => h("a", { href: "#" + tab, text });
+  if (state.status && (state.clients || []).length === 0) {
+    items.push(["bad", ["No proxy clients, so every request is refused. ", link("Add a client", "setup")]]);
+  }
+  for (const s of state.secrets.filter((x) => x.error)) {
+    items.push(["bad", [`Secret ${s.name} cannot be resolved. `, link("Details", "secrets")]]);
+  }
+  for (const w of state.status?.warnings || []) items.push(["warn", [w]]);
+  for (const r of state.config.rules.filter((x) => x.disabled)) {
+    items.push(["info", [`Rule ${r.name || r.host} is paused. `, link("Rules", "rules")]]);
+  }
+  $("#attention-list").replaceChildren(...items.map(([level, content]) => h("li", { class: level }, content)));
+  $("#attention").hidden = items.length === 0;
+}
+
+function renderClientFilter() {
+  const select = $("#activity-client");
+  const current = select.value;
+  const names = (state.clients || []).map((c) => c.name);
+  select.replaceChildren(h("option", { value: "", text: "All clients" }), ...names.map((n) => h("option", { value: n, text: n })));
+  select.value = names.includes(current) ? current : "";
 }
 
 let toastTimer;
@@ -302,10 +331,25 @@ function fmtTime(iso) {
 }
 
 function eventMatches(e) {
+  // An intercepted CONNECT is followed by its requests; show it only when
+  // asked, or when it failed and no request follows.
+  if (e.kind === "connect" && e.mode === "intercept" && !e.rejected && !e.error && !$("#activity-connections").checked) return false;
   if ($("#activity-secrets-only").checked && !(e.secrets && e.secrets.length)) return false;
+  const client = $("#activity-client").value;
+  if (client && e.client !== client) return false;
   const q = $("#activity-filter").value.trim().toLowerCase();
   if (!q) return true;
   return [e.host, e.path, e.rule, e.method, e.mode, e.client, ...(e.secrets || [])].some((v) => v && v.toLowerCase().includes(q));
+}
+
+// errorNote shows a one-line summary of a long error, with the full text on
+// demand. The summary skips wrapper prefixes ("rule x: header y: ... error
+// calling secret:") so the provider's own message comes first.
+function errorNote(text, prefix = "") {
+  const cause = text.split("error calling secret: ").pop().replace(/^secret "[^"]+": /, "");
+  if (text.length <= 140 && cause === text) return h("span", { class: "note bad", text: prefix + text });
+  const summary = prefix + (cause.length > 120 ? cause.slice(0, 117) + "…" : cause);
+  return h("details", { class: "note bad" }, h("summary", { text: summary }), h("div", { class: "detail", text }));
 }
 
 function eventRow(e) {
@@ -314,21 +358,21 @@ function eventRow(e) {
   return h(
     "tr",
     {},
-    h("td", { class: "time", text: fmtTime(e.time), title: e.time }),
-    h("td", { class: "mono", text: e.client || "" }),
-    h("td", {}, modeBadge(e.mode)),
+    h("td", { class: "time c-time", text: fmtTime(e.time), title: e.time }),
+    h("td", { class: "mono nowrap c-client", text: e.client || "—" }),
+    h("td", { class: "optional" }, modeBadge(e.mode)),
     h(
       "td",
-      {},
+      { class: "c-request" },
       request,
       // A rejection already explains the error; keep the detail as a tooltip.
       e.rejected ? h("span", { class: "note bad", text: "Rejected: " + e.rejected, title: e.error }) : null,
-      e.error && !e.rejected ? h("span", { class: "note bad", text: e.error }) : null,
+      e.error && !e.rejected ? errorNote(e.error) : null,
     ),
-    h("td", { text: e.rule || "" }),
-    h("td", {}, chips(e.secrets)),
-    h("td", { class: "num" }, e.status ? h("span", { class: "badge " + statusClass(e.status), text: String(e.status) }) : ""),
-    h("td", { class: "num time", text: e.kind === "request" ? String(e.durationMs ?? 0) : "" }),
+    h("td", { class: "optional nowrap", text: e.rule || "" }),
+    h("td", { class: "c-secrets" }, chips(e.secrets)),
+    h("td", { class: "num c-status" }, e.status ? h("span", { class: "badge " + statusClass(e.status), text: String(e.status) }) : ""),
+    h("td", { class: "num time optional", text: e.kind === "request" ? String(e.durationMs ?? 0) : "" }),
   );
 }
 
@@ -416,7 +460,7 @@ function shortDuration(d) {
 
 function secretStatusCell(st) {
   if (!st) return h("span", { class: "badge", text: "Unknown" });
-  if (st.error) return [h("span", { class: "badge bad", text: "Error" }), h("span", { class: "note bad", text: st.error })];
+  if (st.error) return [h("span", { class: "badge bad", text: "Error" }), errorNote(st.error)];
   if (st.cached) return [h("span", { class: "badge ok", text: "Cached" }), h("span", { class: "note", text: "until " + fmtTime(st.expiresAt) })];
   if (st.fetchedAt) return [h("span", { class: "badge", text: "Expired" }), h("span", { class: "note", text: "fetched " + fmtTime(st.fetchedAt) })];
   return h("span", { class: "badge", text: "Not fetched" });
@@ -434,8 +478,15 @@ function renderSecrets() {
     return h(
       "tr",
       {},
-      h("td", {}, h("span", { class: "mono", text: name }), h("span", { class: "note", text: used.length ? "Used by " + used.join(", ") : "Not used by any rule" })),
-      h("td", {}, h("span", { class: "mono", text: `${s.provider} › ${s.name}` }), s.version ? h("span", { class: "note", text: "version " + s.version }) : null),
+      h("td", { class: "nowrap" }, h("span", { class: "mono", text: name }), h("span", { class: "note", text: used.length ? "Used by " + used.join(", ") : "Not used by any rule" })),
+      h(
+        "td",
+        { class: "nowrap" },
+        h("span", { class: "badge", text: s.provider }),
+        " ",
+        h("span", { class: "mono", text: s.name }),
+        s.version ? h("span", { class: "note", text: "version " + s.version }) : null,
+      ),
       h("td", { text: shortDuration(s.ttl) }),
       h("td", {}, secretStatusCell(statuses[name])),
       h(
@@ -452,6 +503,7 @@ function renderSecrets() {
     );
   });
   $("#secrets-table tbody").replaceChildren(...rows);
+  renderAttention();
   $("#secrets-empty").hidden = rows.length > 0;
   $("#secrets-table").hidden = rows.length === 0;
 }
@@ -587,46 +639,82 @@ function buildTemplate({ format, secret, user, template }) {
   }
 }
 
+// describeInject renders a header template in readable form, with secrets
+// as chips: "Bearer ‹github›", "Basic x-access-token : ‹github›".
+function describeInject(inj) {
+  const p = parseTemplate(inj.value);
+  const secret = (name) => h("span", { class: "badge accent", text: name });
+  let value;
+  switch (p.format) {
+    case "bearer":
+      value = ["Bearer ", secret(p.secret)];
+      break;
+    case "basic":
+      value = ["Basic ", h("span", { class: "mono", text: p.user }), " : ", secret(p.secret)];
+      break;
+    case "raw":
+      value = [secret(p.secret)];
+      break;
+    default:
+      value = [h("span", { class: "mono", text: inj.value })];
+  }
+  return h("div", { class: "inject" }, h("span", { class: "header", text: inj.header }), h("span", { class: "value" }, value));
+}
+
 function renderRules() {
   const rules = state.config.rules;
-  const items = rules.map((r, i) =>
-    h(
+  const known = new Set((state.clients || []).map((c) => c.name));
+  const items = rules.map((r, i) => {
+    const clientChips = r.clients.length
+      ? h(
+          "div",
+          { class: "chips" },
+          r.clients.map((c) => h("span", { class: known.has(c) ? "badge accent" : "badge warn", text: c, title: known.has(c) ? null : "No such client; the rule does not apply to it" })),
+        )
+      : h("span", { class: "note", text: "All clients" });
+    return h(
       "li",
       { class: r.disabled ? "card paused" : "card" },
       h(
         "div",
         { class: "card-head" },
-        h("span", { class: "order", text: `${i + 1}.` }),
-        h("h2", { text: r.name || r.host }),
+        h("span", { class: "order", text: `${i + 1}` }),
+        h("div", { class: "title" }, h("h2", { text: r.name || r.host }), r.name ? h("span", { class: "mono host", text: r.host }) : null),
         r.disabled ? h("span", { class: "badge warn", text: "Paused" }) : null,
-        h("button", {
-          type: "button",
-          class: "btn small",
-          text: r.disabled ? "Resume" : "Pause",
-          title: r.disabled ? "Start injecting secrets for this rule again" : "Stop injecting secrets for this rule",
-          onclick: () => toggleRule(i),
-        }),
-        h("button", { type: "button", class: "btn small icon", text: "↑", title: "Move up", "aria-label": "Move up", disabled: i === 0, onclick: () => moveRule(i, -1) }),
-        h("button", { type: "button", class: "btn small icon", text: "↓", title: "Move down", "aria-label": "Move down", disabled: i === rules.length - 1, onclick: () => moveRule(i, 1) }),
-        h("button", { type: "button", class: "btn small", text: "Edit", onclick: () => ruleDialog(i) }),
-        h("button", { type: "button", class: "btn small danger", text: "Delete", onclick: () => deleteRule(i) }),
+        h(
+          "div",
+          { class: "btn-group" },
+          h("button", {
+            type: "button",
+            class: "btn small",
+            text: r.disabled ? "Resume" : "Pause",
+            title: r.disabled ? "Start injecting secrets for this rule again" : "Stop injecting secrets for this rule",
+            onclick: () => toggleRule(i),
+          }),
+          h("button", { type: "button", class: "btn small icon", text: "↑", title: "Move up", "aria-label": "Move up", disabled: i === 0, onclick: () => moveRule(i, -1) }),
+          h("button", { type: "button", class: "btn small icon", text: "↓", title: "Move down", "aria-label": "Move down", disabled: i === rules.length - 1, onclick: () => moveRule(i, 1) }),
+          h("button", { type: "button", class: "btn small", text: "Edit", onclick: () => ruleDialog(i) }),
+          h("button", { type: "button", class: "btn small danger", text: "Delete", onclick: () => deleteRule(i) }),
+        ),
       ),
       h(
         "dl",
         { class: "kv" },
-        h("dt", { text: "Host" }),
-        h("dd", { class: "mono", text: r.host }),
         h("dt", { text: "Clients" }),
-        h("dd", {}, r.clients.length ? chips(r.clients) : h("span", { class: "note", text: "All clients" })),
-        h("dt", { text: "Methods" }),
-        h("dd", {}, r.methods.length ? chips(r.methods) : h("span", { class: "note", text: "Any method" })),
-        h("dt", { text: "Paths" }),
-        h("dd", {}, r.paths.length ? r.paths.map((p) => h("div", { class: "mono", text: p })) : h("span", { class: "note", text: "Any path" })),
+        h("dd", {}, clientChips),
+        h("dt", { text: "Requests" }),
+        h(
+          "dd",
+          {},
+          h("span", { class: "mono", text: r.methods.length ? r.methods.join(", ") : "Any method" }),
+          h("span", { class: "sep", text: " · " }),
+          h("span", { class: "mono", text: r.paths.length ? r.paths.join("  ") : "any path" }),
+        ),
         h("dt", { text: "Headers" }),
-        h("dd", {}, r.inject.map((inj) => h("div", { class: "inject" }, h("span", { class: "header", text: inj.header + ": " }), inj.value))),
+        h("dd", {}, r.inject.map(describeInject)),
       ),
-    ),
-  );
+    );
+  });
   $("#rules-list").replaceChildren(...items);
   $("#rules-empty").hidden = items.length > 0;
 }
@@ -1002,6 +1090,9 @@ function renderClients() {
 async function refreshClients() {
   state.clients = (await api("GET", "/api/clients")) || [];
   renderClients();
+  renderClientFilter();
+  renderAttention();
+  renderRules();
 }
 
 function clientDialog() {
@@ -1084,6 +1175,8 @@ function init() {
 
   $("#activity-filter").addEventListener("input", renderActivity);
   $("#activity-secrets-only").addEventListener("change", renderActivity);
+  $("#activity-connections").addEventListener("change", renderActivity);
+  $("#activity-client").addEventListener("change", renderActivity);
   $("#activity-pause").addEventListener("click", () => {
     state.paused = !state.paused;
     state.missed = 0;
