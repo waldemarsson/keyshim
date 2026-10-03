@@ -6,7 +6,7 @@ changing the proxy, storage or UI.
 
 ## Commands
 
-Go 1.27 or newer (see `go.mod`).
+Go 1.27.1 or newer (see `go.mod`).
 
 ```bash
 gofmt -l .                        # must print nothing
@@ -15,17 +15,18 @@ go test -race -count=1 ./...
 node --check internal/ui/static/app.js
 shellcheck install.sh scripts/*.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
-scripts/build-release.sh v0.0.0-dev dist   # local release build
+scripts/build-release.sh v0.0.0-dev dist   # local release build; replaces dist/
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of these on Linux and macOS. Run
-them before committing.
+CI (`.github/workflows/ci.yml`) runs all of these: formatting, vet, tests and
+the JavaScript check on Linux and macOS, the rest on Linux. Run them before
+committing.
 
 ## Layout
 
 | Path | Owns |
 |---|---|
-| `cmd/fullmakt` | CLI: `run`, `check`, `ca`, `client`, `secrets`, `key` |
+| `cmd/fullmakt` | CLI: `run`, `check`, `ca`, `client`, `secrets`, `key`, `version` |
 | `internal/config` | YAML config, defaults, validation, warnings, atomic writes |
 | `internal/keystore` | Master key (OS keychain or passphrase), `Seal`/`Open`; `keystoretest` for tests |
 | `internal/secrets` | Providers (encrypted local file, Azure Key Vault) and the TTL cache |
