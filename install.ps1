@@ -79,11 +79,29 @@ try {
   Expand-Archive -Path $assetPath -DestinationPath $extractDir -Force
 
   New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-  # Install through a temporary name so a running binary is replaced atomically.
+  # Windows cannot overwrite a running .exe but can rename it, so move the
+  # current binary aside before putting the new one in place.
   $newPath = Join-Path $installDir 'keyshim.new.exe'
+  $oldPath = Join-Path $installDir 'keyshim.old.exe'
   $finalPath = Join-Path $installDir 'keyshim.exe'
   Copy-Item (Join-Path $extractDir 'keyshim.exe') $newPath -Force
-  Move-Item $newPath $finalPath -Force
+  try {
+    Remove-Item $oldPath -Force -ErrorAction SilentlyContinue
+    if (Test-Path $finalPath) {
+      Move-Item $finalPath $oldPath
+    }
+    try {
+      Move-Item $newPath $finalPath
+    } catch {
+      if (Test-Path $oldPath) { Move-Item $oldPath $finalPath }
+      throw
+    }
+  } catch {
+    Remove-Item $newPath -Force -ErrorAction SilentlyContinue
+    Fail "could not replace ${finalPath}: $_"
+  }
+  # Still locked if the old binary is running; it is removed on the next install.
+  Remove-Item $oldPath -Force -ErrorAction SilentlyContinue
 
   $installedVersion = & $finalPath version
   Write-Host "Installed $installedVersion to $finalPath"

@@ -24,6 +24,9 @@ readonly epoch
 
 rm -rf "$out"
 mkdir -p "$out"
+# zip runs from inside the staging directory, so it needs an absolute path.
+out_abs=$(cd "$out" && pwd)
+readonly out_abs
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -54,9 +57,14 @@ for target in "${targets[@]}"; do
   find "$work/$name" -exec touch -d "@$epoch" {} +
 
   if [[ $os == windows ]]; then
-    # zip has no --sort/--mtime/--owner equivalent; fixed file mtimes and
-    # permissions above, plus -X to drop extra attributes, keep it reproducible.
-    (cd "$work/$name" && zip -X -q "$out/$name.zip" -- *)
+    # zip has no --sort/--mtime/--owner equivalent. Fixed mtimes and
+    # permissions above, -X, UTC (zip stores local-time DOS timestamps) and
+    # C collation for the glob order keep it reproducible.
+    (
+      cd "$work/$name"
+      export TZ=UTC LC_ALL=C
+      zip -X -q "$out_abs/$name.zip" -- *
+    )
     echo "built $out/$name.zip"
   else
     tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
