@@ -4,8 +4,11 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +35,9 @@ const (
 type Options struct {
 	Rules   *rules.Engine
 	Secrets rules.Getter
+	// Clients maps client names to SHA-256 hashes of their tokens. Requests
+	// without valid client credentials are refused with 407.
+	Clients map[string][32]byte
 	CA      *ca.Authority
 	Logger  *slog.Logger
 	// Audit receives every connection and request event. Optional.
@@ -47,18 +53,20 @@ type Options struct {
 // Proxy is an http.Handler for proxy requests: CONNECT tunnels and
 // absolute-form plain HTTP requests.
 type Proxy struct {
-	state     atomic.Pointer[state]
-	ca        *ca.Authority
-	log       *slog.Logger
-	audit     func(audit.Event)
-	dialer    *net.Dialer
-	transport *http.Transport
+	state         atomic.Pointer[state]
+	allowLoopback bool
+	ca            *ca.Authority
+	log           *slog.Logger
+	audit         func(audit.Event)
+	dialer        *net.Dialer
+	transport     *http.Transport
 }
 
 // state is replaced as a whole when the configuration is reloaded.
 type state struct {
 	rules   *rules.Engine
 	secrets rules.Getter
+	clients map[string][32]byte
 }
 
 // ErrForbiddenTarget is returned when a connection to a loopback,
@@ -83,10 +91,11 @@ func New(o Options) *Proxy {
 		}
 	}
 	p := &Proxy{
-		ca:     o.CA,
-		log:    o.Logger,
-		audit:  o.Audit,
-		dialer: dialer,
+		allowLoopback: o.AllowLoopbackTargets,
+		ca:            o.CA,
+		log:           o.Logger,
+		audit:         o.Audit,
+		dialer:        dialer,
 		transport: &http.Transport{
 			// Never chain to a proxy from the environment.
 			Proxy:                 nil,
@@ -99,8 +108,26 @@ func New(o Options) *Proxy {
 			ExpectContinueTimeout: time.Second,
 		},
 	}
-	p.Update(o.Rules, o.Secrets)
+	p.Update(o.Rules, o.Secrets, o.Clients)
 	return p
+}
+
+// checkTarget resolves host and applies the target guard to every address.
+// The transport's dialer checks again at connect time.
+func (p *Proxy) checkTarget(ctx context.Context, host string) error {
+	if p.allowLoopback {
+		return nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return err
+	}
+	for _, a := range addrs {
+		if forbiddenIP(a.IP) {
+			return fmt.Errorf("%w: %s resolves to %s", ErrForbiddenTarget, host, a.IP)
+		}
+	}
+	return nil
 }
 
 func forbiddenIP(ip net.IP) bool {
@@ -108,10 +135,51 @@ func forbiddenIP(ip net.IP) bool {
 		ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast()
 }
 
-// Update replaces the rules and secret source. Requests already in progress
-// finish with the previous ones.
-func (p *Proxy) Update(r *rules.Engine, secrets rules.Getter) {
-	p.state.Store(&state{rules: r, secrets: secrets})
+// Update replaces the rules, secret source and clients. Requests already in
+// progress finish with the previous ones.
+func (p *Proxy) Update(r *rules.Engine, secrets rules.Getter, clients map[string][32]byte) {
+	p.state.Store(&state{rules: r, secrets: secrets, clients: clients})
+}
+
+// authenticate checks the Proxy-Authorization header: Basic auth with the
+// client name as user and its token as password.
+func (p *Proxy) authenticate(r *http.Request) (string, bool) {
+	user, token, ok := parseProxyBasicAuth(r.Header.Get("Proxy-Authorization"))
+	if !ok {
+		return "", false
+	}
+	want, known := p.state.Load().clients[user]
+	got := sha256.Sum256([]byte(token))
+	// Compare even for unknown names so timing does not reveal valid names.
+	if subtle.ConstantTimeCompare(got[:], want[:]) != 1 || !known {
+		return "", false
+	}
+	return user, true
+}
+
+func parseProxyBasicAuth(header string) (user, password string, ok bool) {
+	scheme, encoded, found := strings.Cut(header, " ")
+	if !found || !strings.EqualFold(scheme, "Basic") {
+		return "", "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		return "", "", false
+	}
+	return strings.Cut(string(decoded), ":")
+}
+
+// requireClient answers 407 and records the attempt when the request has no
+// valid client credentials.
+func (p *Proxy) requireClient(w http.ResponseWriter, r *http.Request, ev audit.Event) (string, bool) {
+	if name, ok := p.authenticate(r); ok {
+		return name, true
+	}
+	ev.Status, ev.Rejected = http.StatusProxyAuthRequired, "missing or invalid client credentials"
+	p.record(ev)
+	w.Header().Set("Proxy-Authenticate", `Basic realm="fullmakt"`)
+	http.Error(w, "fullmakt: proxy credentials required; set HTTPS_PROXY=http://<client>:<token>@host:port", http.StatusProxyAuthRequired)
+	return "", false
 }
 
 func (p *Proxy) record(e audit.Event) {
@@ -141,15 +209,26 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host = rules.NormalizeHost(host)
-	intercept := p.state.Load().rules.Intercepts(host, port)
 	ev := audit.Event{Kind: "connect", Host: r.Host, Mode: "tunnel"}
+	client, ok := p.requireClient(w, r, ev)
+	if !ok {
+		return
+	}
+	ev.Client = client
+	intercept := p.state.Load().rules.Intercepts(host, port)
 	if intercept {
 		ev.Mode = "intercept"
 	}
 
-	// Dial before answering, so failures surface as an HTTP status. For
-	// intercepted hosts this also applies the target guard up front.
-	upstream, err := p.dialer.DialContext(r.Context(), "tcp", r.Host)
+	// Check the target before answering, so failures surface as an HTTP
+	// status. Tunnels dial now; intercepted hosts are only resolved and
+	// checked, because their requests use the pooled transport.
+	var upstream net.Conn
+	if intercept {
+		err = p.checkTarget(r.Context(), host)
+	} else {
+		upstream, err = p.dialer.DialContext(r.Context(), "tcp", r.Host)
+	}
 	if err != nil {
 		ev.Error = err.Error()
 		status := http.StatusBadGateway
@@ -160,10 +239,6 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		p.record(ev)
 		http.Error(w, "fullmakt: cannot connect to target", status)
 		return
-	}
-	if intercept {
-		// Requests inside the tunnel use the pooled transport instead.
-		upstream.Close()
 	}
 
 	conn, brw, err := http.NewResponseController(w).Hijack()
@@ -184,18 +259,18 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.record(ev)
-	client := &bufferedConn{Conn: conn, r: brw.Reader}
+	clientConn := &bufferedConn{Conn: conn, r: brw.Reader}
 	if intercept {
-		p.intercept(client, host, port)
+		p.intercept(clientConn, host, port, client)
 		return
 	}
-	tunnel(client, upstream)
+	tunnel(clientConn, upstream)
 }
 
 // intercept terminates TLS with a leaf certificate for host and serves the
 // requests inside the tunnel.
-func (p *Proxy) intercept(client net.Conn, host, port string) {
-	tlsConn := tls.Server(client, &tls.Config{
+func (p *Proxy) intercept(conn net.Conn, host, port, client string) {
+	tlsConn := tls.Server(conn, &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"http/1.1"},
 		// The certificate always names the CONNECT target, whatever SNI says.
@@ -212,7 +287,7 @@ func (p *Proxy) intercept(client net.Conn, host, port string) {
 	_ = tlsConn.SetDeadline(time.Time{})
 
 	srv := &http.Server{
-		Handler:           p.interceptedHandler(host, port),
+		Handler:           p.interceptedHandler(host, port, client),
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		ErrorLog:          slog.NewLogLogger(p.log.Handler(), slog.LevelDebug),
@@ -220,11 +295,11 @@ func (p *Proxy) intercept(client net.Conn, host, port string) {
 	_ = srv.Serve(newSingleConnListener(tlsConn))
 }
 
-func (p *Proxy) interceptedHandler(host, port string) http.Handler {
+func (p *Proxy) interceptedHandler(host, port, client string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		ev := audit.Event{Kind: "request", Mode: "intercept", Host: authority(host, port), Method: r.Method, Path: r.URL.Path}
+		ev := audit.Event{Kind: "request", Mode: "intercept", Client: client, Host: authority(host, port), Method: r.Method, Path: r.URL.Path}
 		defer func() {
 			ev.Status, ev.DurationMs = rec.status, time.Since(start).Milliseconds()
 			p.record(ev)
@@ -246,6 +321,12 @@ func (p *Proxy) interceptedHandler(host, port string) http.Handler {
 			if isUpgrade(r) {
 				ev.Rejected = "protocol upgrade"
 				http.Error(rec, "fullmakt: protocol upgrades cannot receive secrets", http.StatusForbidden)
+				return
+			}
+			// TRACE echoes the request, including injected headers.
+			if r.Method == http.MethodTrace {
+				ev.Rejected = "TRACE"
+				http.Error(rec, "fullmakt: TRACE cannot receive secrets", http.StatusForbidden)
 				return
 			}
 			var err error
@@ -271,6 +352,10 @@ func (p *Proxy) interceptedHandler(host, port string) http.Handler {
 				// Let the transport negotiate gzip and decode it, so the
 				// response body is plain text that can be redacted.
 				pr.Out.Header.Del("Accept-Encoding")
+				// Byte ranges could return a stored secret in pieces
+				// that redaction cannot recognise.
+				pr.Out.Header.Del("Range")
+				pr.Out.Header.Del("If-Range")
 			},
 			Transport:    p.transport,
 			ErrorHandler: upstreamError(&ev),
@@ -288,8 +373,13 @@ func (p *Proxy) interceptedHandler(host, port string) http.Handler {
 // HTTP, so no rules apply.
 func (p *Proxy) forwardPlain(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	ev := audit.Event{Kind: "request", Mode: "plain", Host: r.URL.Host, Method: r.Method, Path: r.URL.Path}
+	client, ok := p.requireClient(w, r, ev)
+	if !ok {
+		return
+	}
+	ev.Client = client
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
 		ev.Status, ev.DurationMs = rec.status, time.Since(start).Milliseconds()
 		p.record(ev)

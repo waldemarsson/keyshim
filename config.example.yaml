@@ -13,15 +13,29 @@ listen: 127.0.0.1:8899
 #   listen: 127.0.0.1:8900
 #   disabled: false
 
+# Where the master key that encrypts local secrets and the CA key comes from:
+# keychain (OS keychain, default) or passphrase (FULLMAKT_PASSPHRASE or a
+# terminal prompt). key.json next to this file identifies the key.
+# encryption:
+#   key: keychain
+
 # Proxy clients cannot reach loopback or link-local addresses (this host's
 # services, the UI, cloud metadata endpoints) unless this is set.
 # allowLoopbackTargets: false
 
+# Sandboxes allowed to use the proxy; everything else gets 407. Add them with
+# `fullmakt client add <name>` or the UI, which print the token once and
+# store only its hash here.
+# clients:
+#   - name: agentbox
+#     tokenHash: sha256:...
+
 providers:
-  # YAML file of key: value pairs; must be chmod 600.
+  # File encrypted with the master key. Add values with the UI or
+  # `fullmakt secrets add <name>`; they can never be read back.
   local:
     type: local
-    file: ~/.config/fullmakt/secrets.yaml
+    file: ~/.config/fullmakt/secrets.enc
   # Authenticates with DefaultAzureCredential (az login, managed identity,
   # workload identity, environment).
   kv:

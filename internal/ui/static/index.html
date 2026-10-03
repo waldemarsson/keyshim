@@ -22,12 +22,13 @@
       <a href="#setup" data-tab="setup">Setup</a>
     </nav>
     <div class="status" id="status"></div>
+    <button type="button" class="btn small" id="logout" hidden>Sign out</button>
   </header>
 
   <main>
     <div class="notice" id="signed-out" hidden>
       <h2>Not signed in</h2>
-      <p>Open the login URL that <code>fullmakt run</code> printed in the terminal. A new URL is created each time fullmakt starts.</p>
+      <p>Open the newest login URL that <code>fullmakt run</code> printed in the terminal. Each URL works once; a new one is printed after every login.</p>
     </div>
 
     <section class="panel" id="activity" hidden>
@@ -45,7 +46,7 @@
       </div>
       <div class="table-wrap">
         <table class="table" id="activity-table">
-          <thead><tr><th>Time</th><th>Mode</th><th>Request</th><th>Rule</th><th>Secrets</th><th class="num">Status</th><th class="num">ms</th></tr></thead>
+          <thead><tr><th>Time</th><th>Client</th><th>Mode</th><th>Request</th><th>Rule</th><th>Secrets</th><th class="num">Status</th><th class="num">ms</th></tr></thead>
           <tbody></tbody>
         </table>
         <p class="empty" id="activity-empty">No activity yet. Point a client at the proxy to see requests here.</p>
@@ -108,13 +109,25 @@
       <div class="grid">
         <div class="box">
           <h2>1. Trust the CA</h2>
-          <p>Clients must trust fullmakt's CA for hosts that receive secrets. Only the public certificate is downloaded; the key never leaves this machine.</p>
-          <p><a class="btn primary" href="/api/ca.pem" download>Download CA certificate</a></p>
+          <p>Sandboxes must trust fullmakt's CA for hosts that receive secrets. Trust it <strong>only inside sandboxes</strong>, never on this machine: whoever holds the CA key could intercept HTTPS for everything that trusts it.</p>
+          <p><button type="button" class="btn primary" id="download-ca">Download CA certificate</button></p>
           <pre class="code" id="setup-ca"></pre>
         </div>
         <div class="box">
-          <h2>2. Use the proxy</h2>
-          <p>Set these in the client environment. Give tools the placeholder <code>proxy-managed</code> as their credential; rules decide which secret replaces it.</p>
+          <h2>2. Add a client</h2>
+          <p>Each sandbox gets its own name and token. Requests without valid client credentials are refused. The token is shown once.</p>
+          <div class="table-wrap">
+            <table class="table" id="clients-table">
+              <thead><tr><th>Client</th><th>Added</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <p class="empty" id="clients-empty">No clients yet. The proxy refuses every request until you add one.</p>
+          </div>
+          <p><button type="button" class="btn primary" id="add-client">Add client</button></p>
+        </div>
+        <div class="box">
+          <h2>3. Use the proxy</h2>
+          <p>Set these in the sandbox, with the client's name and token. Give tools the placeholder <code>proxy-managed</code> as their credential; rules decide which secret replaces it.</p>
           <pre class="code" id="setup-env"></pre>
         </div>
         <div class="box">

@@ -3,6 +3,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +27,9 @@ const (
 	DefaultListen   = "127.0.0.1:8899"
 	DefaultUIListen = "127.0.0.1:8900"
 	DefaultTTL      = Duration(15 * time.Minute)
+
+	KeyKeychain   = "keychain"
+	KeyPassphrase = "passphrase"
 
 	ProviderLocal         = "local"
 	ProviderAzureKeyVault = "azure-keyvault"
@@ -37,18 +43,37 @@ type Config struct {
 	AllowNonLoopback bool `yaml:"allowNonLoopback,omitempty" json:"allowNonLoopback"`
 	// AllowLoopbackTargets lets proxy clients reach loopback and link-local
 	// addresses, which includes services on the proxy's own host.
-	AllowLoopbackTargets bool                `yaml:"allowLoopbackTargets,omitempty" json:"allowLoopbackTargets"`
-	CADir                string              `yaml:"caDir,omitempty" json:"caDir"`
-	UI                   UI                  `yaml:"ui,omitempty" json:"ui"`
-	Providers            map[string]Provider `yaml:"providers,omitempty" json:"providers"`
-	Secrets              map[string]Secret   `yaml:"secrets,omitempty" json:"secrets"`
-	Rules                []Rule              `yaml:"rules,omitempty" json:"rules"`
+	AllowLoopbackTargets bool       `yaml:"allowLoopbackTargets,omitempty" json:"allowLoopbackTargets"`
+	CADir                string     `yaml:"caDir,omitempty" json:"caDir"`
+	Encryption           Encryption `yaml:"encryption,omitempty" json:"encryption"`
+	UI                   UI         `yaml:"ui,omitempty" json:"ui"`
+	// Clients may use the proxy; requests without valid client credentials
+	// are refused.
+	Clients   []Client            `yaml:"clients,omitempty" json:"clients"`
+	Providers map[string]Provider `yaml:"providers,omitempty" json:"providers"`
+	Secrets   map[string]Secret   `yaml:"secrets,omitempty" json:"secrets"`
+	Rules     []Rule              `yaml:"rules,omitempty" json:"rules"`
+}
+
+// Encryption selects where the master key for data at rest comes from.
+type Encryption struct {
+	// Key is "keychain" (OS keychain, the default) or "passphrase".
+	Key string `yaml:"key,omitempty" json:"key"`
 }
 
 // UI configures the management web UI. It always listens on loopback.
 type UI struct {
 	Listen   string `yaml:"listen,omitempty" json:"listen"`
 	Disabled bool   `yaml:"disabled,omitempty" json:"disabled"`
+}
+
+// Client is a sandbox allowed to use the proxy. It authenticates with HTTP
+// proxy Basic auth: the name as user and a random token as password. Only a
+// hash of the token is stored.
+type Client struct {
+	Name      string    `yaml:"name" json:"name"`
+	TokenHash string    `yaml:"tokenHash" json:"tokenHash"`
+	AddedAt   time.Time `yaml:"addedAt,omitempty" json:"addedAt"`
 }
 
 // Provider is a secret backend.
@@ -151,6 +176,9 @@ func DefaultDir() (string, error) {
 
 // Load reads, defaults and validates the configuration at path.
 func Load(path string) (*Config, error) {
+	if err := CheckWritableOnlyByOwner(path); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -222,6 +250,9 @@ func (c *Config) applyDefaults() error {
 	if c.UI.Listen == "" {
 		c.UI.Listen = DefaultUIListen
 	}
+	if c.Encryption.Key == "" {
+		c.Encryption.Key = KeyKeychain
+	}
 	if c.CADir == "" {
 		dir, err := DefaultDir()
 		if err != nil {
@@ -280,6 +311,23 @@ func (c *Config) Validate() error {
 	}
 	if !c.UI.Disabled && c.UI.Listen == c.Listen {
 		add("ui.listen must differ from listen")
+	}
+	if c.Encryption.Key != KeyKeychain && c.Encryption.Key != KeyPassphrase {
+		add("encryption.key must be %q or %q", KeyKeychain, KeyPassphrase)
+	}
+
+	seenClients := map[string]bool{}
+	for _, cl := range c.Clients {
+		if !secretNamePattern.MatchString(cl.Name) {
+			add("client %q: names may contain only letters, digits, '_' and '-'", cl.Name)
+		}
+		if seenClients[cl.Name] {
+			add("client %q is listed twice", cl.Name)
+		}
+		seenClients[cl.Name] = true
+		if _, err := ParseTokenHash(cl.TokenHash); err != nil {
+			add("client %q: %v", cl.Name, err)
+		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(c.Providers)) {
@@ -357,4 +405,42 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// ParseTokenHash decodes a "sha256:<hex>" client token hash.
+func ParseTokenHash(s string) ([32]byte, error) {
+	var out [32]byte
+	hexPart, ok := strings.CutPrefix(s, "sha256:")
+	if !ok {
+		return out, errors.New(`tokenHash must start with "sha256:"`)
+	}
+	b, err := hex.DecodeString(hexPart)
+	if err != nil || len(b) != len(out) {
+		return out, errors.New("tokenHash must be 64 hex characters after sha256:")
+	}
+	copy(out[:], b)
+	return out, nil
+}
+
+// HashToken returns the stored form of a client token.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// CheckWritableOnlyByOwner refuses a file that group or others may write.
+// Such a file could be changed to send secrets elsewhere. Windows file modes
+// do not reflect ACLs, so the check is skipped there.
+func CheckWritableOnlyByOwner(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if perm := info.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("%s: permissions %#o let group or others modify it; run chmod 600", path, perm)
+	}
+	return nil
 }

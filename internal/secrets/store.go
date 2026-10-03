@@ -15,6 +15,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 
 	"github.com/waldemarsson/fullmakt/internal/config"
+	"github.com/waldemarsson/fullmakt/internal/keystore"
 )
 
 // Provider fetches a secret value from a backend.
@@ -60,14 +61,15 @@ type Status struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// NewProviders creates the providers declared in cfg.
-func NewProviders(cfg *config.Config) (map[string]Provider, error) {
+// NewProviders creates the providers declared in cfg. key encrypts local
+// providers' files.
+func NewProviders(cfg *config.Config, key *keystore.Key) (map[string]Provider, error) {
 	providers := map[string]Provider{}
 	var azureCred azcore.TokenCredential
 	for name, pc := range cfg.Providers {
 		switch pc.Type {
 		case config.ProviderLocal:
-			providers[name] = NewLocal(pc.File)
+			providers[name] = NewLocal(pc.File, key)
 		case config.ProviderAzureKeyVault:
 			if azureCred == nil {
 				cred, err := azidentity.NewDefaultAzureCredential(nil)

@@ -39,6 +39,58 @@ function h(tag, props, ...children) {
   return el;
 }
 
+// ---------------------------------------------------------------- session
+
+// The session token is kept in localStorage, which is scoped to this origin
+// including the port, and sent as a bearer header. Cookies are avoided
+// because browsers send them to every port on 127.0.0.1, including ports a
+// VM forwards to this machine.
+const SESSION_KEY = "fullmakt.session";
+
+function loadSession() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    if (s && s.session && new Date(s.expiresAt) > new Date()) return s.session;
+  } catch {}
+  return null;
+}
+
+function storeSession(s) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  } catch {}
+}
+
+function clearSession() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {}
+}
+
+// Exchanges a single-use login token from the URL fragment for a session.
+async function loginFromFragment() {
+  const match = location.hash.match(/^#login=([0-9a-f]+)$/);
+  if (!match) return;
+  // Remove the token from the address bar and history right away.
+  history.replaceState(null, "", location.pathname + "#activity");
+  const res = await fetch("/api/session", {
+    method: "POST",
+    headers: { "X-Fullmakt-Request": "1", "Content-Type": "application/json" },
+    body: JSON.stringify({ token: match[1] }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    toast(data?.errors?.[0] || "Login failed", true);
+    return;
+  }
+  storeSession(await res.json());
+}
+
+function authHeaders() {
+  const session = loadSession();
+  return session ? { Authorization: `Bearer ${session}` } : {};
+}
+
 // ---------------------------------------------------------------- API
 
 class ApiError extends Error {
@@ -50,13 +102,14 @@ class ApiError extends Error {
 }
 
 async function api(method, path, body) {
-  const options = { method, headers: { "X-Fullmakt-Request": "1" } };
+  const options = { method, headers: { "X-Fullmakt-Request": "1", ...authHeaders() } };
   if (body !== undefined) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
   const res = await fetch(path, options);
   if (res.status === 401) {
+    clearSession();
     setSignedOut();
     throw new ApiError(401, ["Not signed in"]);
   }
@@ -82,13 +135,15 @@ function normalizeConfig(c) {
 }
 
 async function loadAll() {
-  const [status, config, secrets, events] = await Promise.all([
+  const [status, config, secrets, events, clients] = await Promise.all([
     api("GET", "/api/status"),
     api("GET", "/api/config"),
     api("GET", "/api/secrets"),
     api("GET", "/api/events"),
+    api("GET", "/api/clients"),
   ]);
   state.status = status;
+  state.clients = clients || [];
   state.config = normalizeConfig(config);
   state.secrets = secrets || [];
   state.events = (events || []).reverse();
@@ -116,6 +171,7 @@ async function saveConfig(mutate) {
 function setSignedOut() {
   state.signedOut = true;
   $("#signed-out").hidden = false;
+  $("#logout").hidden = true;
   showTab();
   renderStatus();
 }
@@ -248,7 +304,7 @@ function eventMatches(e) {
   if ($("#activity-secrets-only").checked && !(e.secrets && e.secrets.length)) return false;
   const q = $("#activity-filter").value.trim().toLowerCase();
   if (!q) return true;
-  return [e.host, e.path, e.rule, e.method, e.mode, ...(e.secrets || [])].some((v) => v && v.toLowerCase().includes(q));
+  return [e.host, e.path, e.rule, e.method, e.mode, e.client, ...(e.secrets || [])].some((v) => v && v.toLowerCase().includes(q));
 }
 
 function eventRow(e) {
@@ -258,6 +314,7 @@ function eventRow(e) {
     "tr",
     {},
     h("td", { class: "time", text: fmtTime(e.time), title: e.time }),
+    h("td", { class: "mono", text: e.client || "" }),
     h("td", {}, modeBadge(e.mode)),
     h(
       "td",
@@ -298,17 +355,43 @@ function addEvent(e) {
   $("#activity-table").hidden = false;
 }
 
-function connectStream() {
-  const source = new EventSource("/api/events/stream");
-  source.onopen = () => {
-    state.live = true;
-    renderStatus();
-  };
-  source.onmessage = (m) => addEvent(JSON.parse(m.data));
-  source.onerror = () => {
+// Reads the server-sent event stream with fetch, which, unlike EventSource,
+// can send the Authorization header. Reconnects after errors.
+async function connectStream() {
+  while (!state.signedOut) {
+    try {
+      const res = await fetch("/api/events/stream", { headers: authHeaders() });
+      if (res.status === 401) {
+        clearSession();
+        setSignedOut();
+        return;
+      }
+      if (!res.ok || !res.body) throw new Error(`stream status ${res.status}`);
+      state.live = true;
+      renderStatus();
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        let end;
+        while ((end = buffer.indexOf("\n\n")) >= 0) {
+          const message = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          const data = message
+            .split("\n")
+            .filter((line) => line.startsWith("data: "))
+            .map((line) => line.slice(6))
+            .join("\n");
+          if (data) addEvent(JSON.parse(data));
+        }
+      }
+    } catch {}
     state.live = false;
     renderStatus();
-  };
+    await new Promise((r) => setTimeout(r, 3000));
+  }
 }
 
 // ---------------------------------------------------------------- secrets
@@ -359,7 +442,7 @@ function renderSecrets() {
         { class: "row-actions" },
         check,
         " ",
-        isLocal ? h("button", { type: "button", class: "btn small", text: "Set value", onclick: () => setValueDialog(s.provider, s.name) }) : null,
+        isLocal ? h("button", { type: "button", class: "btn small", text: "Values", onclick: () => keysDialog(s.provider) }) : null,
         isLocal ? " " : null,
         h("button", { type: "button", class: "btn small", text: "Edit", onclick: () => secretDialog(name) }),
         " ",
@@ -401,12 +484,13 @@ function secretDialog(original) {
 
   const remoteField = field("", remote);
   const versionField = field("Version", version, "Empty means the latest version.");
-  const valueField = field("Value", value, original ? "Leave empty to keep the current value." : "Stored in the provider's file. It cannot be read back.");
+  const valueField = field("Value", value, "Optional. Encrypted in the provider's file; it can never be viewed or changed, only deleted.");
   const sync = () => {
     const local = providerType(provider.value) === "local";
     remoteField.firstChild.textContent = local ? "Key in file" : "Key Vault secret name";
     versionField.hidden = local;
-    valueField.hidden = !local;
+    // Existing values are never edited; only new secrets can bring a value.
+    valueField.hidden = !local || Boolean(original);
   };
   provider.addEventListener("change", sync);
   sync();
@@ -430,6 +514,8 @@ function secretDialog(original) {
       const local = providerType(provider.value) === "local";
       const entry = { provider: provider.value, name: remote.value.trim(), ttl: ttl.value.trim() || "15m" };
       if (!local && version.value.trim()) entry.version = version.value.trim();
+      // Store the value first: if it already exists, nothing else changes.
+      if (local && !original && value.value) await addLocalValue(entry.provider, entry.name, value.value);
       await saveConfig((cfg) => {
         if (original && original !== key) {
           delete cfg.secrets[original];
@@ -437,7 +523,6 @@ function secretDialog(original) {
         }
         cfg.secrets[key] = entry;
       });
-      if (local && value.value) await putLocalValue(entry.provider, entry.name, value.value);
       toast(original ? "Secret updated" : "Secret added");
     },
   });
@@ -460,23 +545,10 @@ function deleteSecret(name) {
   run(() => saveConfig((cfg) => delete cfg.secrets[name]), "Secret deleted");
 }
 
-async function putLocalValue(provider, key, value) {
-  await api("PUT", `/api/providers/${encodeURIComponent(provider)}/keys/${encodeURIComponent(key)}`, { value });
+async function addLocalValue(provider, name, value) {
+  await api("POST", `/api/providers/${encodeURIComponent(provider)}/keys`, { name, value });
   state.secrets = (await api("GET", "/api/secrets")) || [];
   renderSecrets();
-}
-
-function setValueDialog(provider, key) {
-  const value = secretInput();
-  openDialog({
-    title: `Set value for ${key}`,
-    body: h("div", { class: "stack" }, field("Value", value, `Written to provider ${provider}. Values are write-only and cannot be read back here.`)),
-    onSubmit: async () => {
-      if (!value.value) fail("Value is required");
-      await putLocalValue(provider, key, value.value);
-      toast("Value saved");
-    },
-  });
 }
 
 // ---------------------------------------------------------------- rules
@@ -707,12 +779,12 @@ function renderProviders() {
 }
 
 function providerDialog(original) {
-  const p = original ? state.config.providers[original] : { type: "local", file: "~/.config/fullmakt/secrets.yaml", vaultUri: "" };
+  const p = original ? state.config.providers[original] : { type: "local", file: "~/.config/fullmakt/secrets.enc", vaultUri: "" };
   const name = textInput(original, { placeholder: "kv" });
   const type = select(PROVIDER_TYPES, p.type);
-  const file = textInput(p.file, { placeholder: "~/.config/fullmakt/secrets.yaml" });
+  const file = textInput(p.file, { placeholder: "~/.config/fullmakt/secrets.enc" });
   const vault = textInput(p.vaultUri, { placeholder: "https://my-vault.vault.azure.net" });
-  const fileField = field("File", file, "YAML file of key: value pairs. Created with mode 600 when you set the first value.");
+  const fileField = field("File", file, "Encrypted with the master key. Created with mode 600 when you add the first value.");
   const vaultField = field("Vault URI", vault, "Signs in with DefaultAzureCredential, for example `az login`. Needs the Key Vault Secrets User role.");
   const sync = () => {
     fileField.hidden = type.value !== "local";
@@ -753,64 +825,69 @@ function deleteProvider(name) {
   run(() => saveConfig((cfg) => delete cfg.providers[name]), "Provider deleted");
 }
 
+function fmtDateTime(iso) {
+  return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
 async function keysDialog(provider) {
-  let keys;
+  let entries;
   try {
-    keys = await api("GET", `/api/providers/${encodeURIComponent(provider)}/keys`);
+    entries = await api("GET", `/api/providers/${encodeURIComponent(provider)}/keys`);
   } catch (err) {
     if (err.status !== 401) toast(err.message, true);
     return;
   }
   const list = h("div", { class: "table-wrap" });
-  const renderKeys = () => {
+  const renderEntries = () => {
+    const rows = [...entries]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((e) =>
+        h(
+          "tr",
+          {},
+          h("td", { class: "mono", text: e.name }),
+          h("td", { class: "time", text: fmtDateTime(e.addedAt), title: e.addedAt }),
+          h(
+            "td",
+            { class: "row-actions" },
+            h("button", { type: "button", class: "btn small danger", text: "Delete", onclick: () => removeEntry(e.name) }),
+          ),
+        ),
+      );
     list.replaceChildren(
-      keys.length
-        ? h(
-            "table",
-            { class: "table" },
-            h(
-              "tbody",
-              {},
-              keys.map((k) =>
-                h(
-                  "tr",
-                  {},
-                  h("td", { class: "mono", text: k }),
-                  h(
-                    "td",
-                    { class: "row-actions" },
-                    h("button", { type: "button", class: "btn small danger", text: "Delete", onclick: () => removeKey(k) }),
-                  ),
-                ),
-              ),
-            ),
-          )
+      rows.length
+        ? h("table", { class: "table" }, h("thead", {}, h("tr", {}, h("th", { text: "Name" }), h("th", { text: "Added" }), h("th"))), h("tbody", {}, rows))
         : h("p", { class: "empty", text: "No values stored yet." }),
     );
   };
-  const removeKey = (k) => {
-    if (!confirm(`Delete value ${k} from ${provider}?`)) return;
+  const removeEntry = (name) => {
+    const used = Object.entries(state.config.secrets).filter(([, s]) => s.provider === provider && s.name === name).map(([n]) => n);
+    const warning = used.length ? ` Secret ${used.join(", ")} will stop resolving.` : "";
+    if (!confirm(`Delete ${name} from ${provider}? This cannot be undone.${warning}`)) return;
     run(async () => {
-      await api("DELETE", `/api/providers/${encodeURIComponent(provider)}/keys/${encodeURIComponent(k)}`);
-      keys = keys.filter((x) => x !== k);
-      renderKeys();
+      await api("DELETE", `/api/providers/${encodeURIComponent(provider)}/keys/${encodeURIComponent(name)}`);
+      entries = entries.filter((e) => e.name !== name);
+      renderEntries();
+      state.secrets = (await api("GET", "/api/secrets")) || [];
+      renderSecrets();
     }, "Value deleted");
   };
-  const key = textInput("", { placeholder: "key" });
+  const name = textInput("", { placeholder: "name", "aria-label": "Name" });
   const value = secretInput();
   value.placeholder = "value";
-  const add = h("button", { type: "button", class: "btn small primary", text: "Store" });
+  value.setAttribute("aria-label", "Value");
+  const add = h("button", { type: "button", class: "btn small primary", text: "Add" });
   const store = () =>
     run(async () => {
-      const k = key.value.trim();
-      if (!k || !value.value) fail("Key and value are required");
-      await putLocalValue(provider, k, value.value);
-      if (!keys.includes(k)) keys = [...keys, k].sort();
-      key.value = value.value = "";
-      renderKeys();
-    }, "Value stored");
+      const n = name.value.trim();
+      if (!n || !value.value) fail("Name and value are required");
+      await addLocalValue(provider, n, value.value);
+      entries = [...entries, { name: n, addedAt: new Date().toISOString() }];
+      name.value = value.value = "";
+      renderEntries();
+    }, "Value added");
   add.addEventListener("click", store);
-  for (const input of [key, value]) {
+  for (const input of [name, value]) {
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -818,15 +895,15 @@ async function keysDialog(provider) {
       }
     });
   }
-  renderKeys();
+  renderEntries();
   openDialog({
     title: `Values in ${provider}`,
     body: h(
       "div",
       { class: "stack" },
-      h("p", { class: "sub", text: "Key names only. Values are write-only: you can replace or delete them, never read them." }),
+      h("p", { class: "sub", text: "Values are encrypted and write-only: they can be added and deleted, never viewed or changed. To replace one, delete it and add it again." }),
       list,
-      h("div", { class: "field" }, h("span", { text: "Store a value" }), h("div", { class: "field-row" }, key, value), h("div", {}, add)),
+      h("div", { class: "field" }, h("span", { text: "Add a value" }), h("div", { class: "field-row" }, name, value), h("div", {}, add)),
     ),
   });
 }
@@ -853,21 +930,18 @@ function renderSetup() {
   copyable(
     $("#setup-ca"),
     [
-      "# Ubuntu / Debian",
+      "# Inside the sandbox (Ubuntu / Debian)",
       "sudo cp fullmakt-ca.pem /usr/local/share/ca-certificates/fullmakt.crt",
       "sudo update-ca-certificates",
-      "",
-      "# macOS",
-      "sudo security add-trusted-cert -d -r trustRoot \\",
-      "  -k /Library/Keychains/System.keychain fullmakt-ca.pem",
     ].join("\n"),
   );
+  renderClients();
   copyable(
     $("#setup-env"),
     [
-      "# From a Lima VM. On this machine, use 127.0.0.1.",
-      `export HTTPS_PROXY=http://host.lima.internal:${port}`,
-      `export HTTP_PROXY=http://host.lima.internal:${port}`,
+      "# From a Lima VM, with the client's name and token",
+      `export HTTPS_PROXY=http://<client>:<token>@host.lima.internal:${port}`,
+      `export HTTP_PROXY=http://<client>:<token>@host.lima.internal:${port}`,
       "export NO_PROXY=localhost,127.0.0.1",
       "",
       "# Runtimes with their own trust stores",
@@ -888,6 +962,80 @@ function renderSetup() {
     ["Version", s.version],
   ];
   $("#setup-facts").replaceChildren(...facts.flatMap(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]));
+}
+
+function renderClients() {
+  const rows = (state.clients || []).map((c) =>
+    h(
+      "tr",
+      {},
+      h("td", { class: "mono", text: c.name }),
+      h("td", { class: "time", text: c.addedAt ? fmtDateTime(c.addedAt) : "" }),
+      h(
+        "td",
+        { class: "row-actions" },
+        h("button", { type: "button", class: "btn small danger", text: "Delete", onclick: () => deleteClient(c.name) }),
+      ),
+    ),
+  );
+  $("#clients-table tbody").replaceChildren(...rows);
+  $("#clients-empty").hidden = rows.length > 0;
+  $("#clients-table").hidden = rows.length === 0;
+}
+
+async function refreshClients() {
+  state.clients = (await api("GET", "/api/clients")) || [];
+  renderClients();
+}
+
+function clientDialog() {
+  const name = textInput("", { placeholder: "agentbox", pattern: "[A-Za-z0-9_-]+" });
+  openDialog({
+    title: "Add client",
+    submitLabel: "Create",
+    body: h("div", { class: "stack" }, field("Name", name, "One per sandbox, for example the VM or container name.")),
+    onSubmit: async () => {
+      const result = await api("POST", "/api/clients", { name: name.value.trim() });
+      await refreshClients();
+      // Show the token once, in a fresh dialog; it cannot be retrieved later.
+      setTimeout(() => showClientToken(result), 0);
+    },
+  });
+}
+
+function showClientToken({ name, token }) {
+  const port = state.status.proxyListen.split(":").pop();
+  const pre = h("pre", { class: "code" });
+  const body = h(
+    "div",
+    { class: "stack" },
+    h("p", { class: "sub", text: "Copy this now. Only a hash is stored, so the token cannot be shown again. Anyone with it can use your secrets through the proxy." }),
+    pre,
+  );
+  openDialog({ title: `Token for ${name}`, body });
+  copyable(pre, [`export HTTPS_PROXY=http://${name}:${token}@host.lima.internal:${port}`, `export HTTP_PROXY=http://${name}:${token}@host.lima.internal:${port}`].join("\n"));
+}
+
+function deleteClient(name) {
+  if (!confirm(`Delete client ${name}? Its token stops working immediately.`)) return;
+  run(async () => {
+    await api("DELETE", `/api/clients/${encodeURIComponent(name)}`);
+    await refreshClients();
+  }, "Client deleted");
+}
+
+async function downloadCA() {
+  const res = await fetch("/api/ca.pem", { headers: authHeaders() });
+  if (!res.ok) {
+    toast("Download failed", true);
+    return;
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = h("a", { href: url, download: "fullmakt-ca.pem" });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------- wiring
@@ -928,6 +1076,15 @@ function init() {
   $("#add-secret").addEventListener("click", () => secretDialog());
   $("#add-rule").addEventListener("click", () => ruleDialog());
   $("#add-provider").addEventListener("click", () => providerDialog());
+  $("#add-client").addEventListener("click", () => clientDialog());
+  $("#download-ca").addEventListener("click", downloadCA);
+  $("#logout").addEventListener("click", () =>
+    run(async () => {
+      await api("DELETE", "/api/session").catch(() => {});
+      clearSession();
+      setSignedOut();
+    }),
+  );
   $("#reload-config").addEventListener("click", () =>
     run(async () => {
       state.config = normalizeConfig(await api("POST", "/api/reload"));
@@ -939,8 +1096,11 @@ function init() {
   window.addEventListener("hashchange", showTab);
   showTab();
 
-  loadAll().then(
+  loginFromFragment()
+    .then(loadAll)
+    .then(
     () => {
+      $("#logout").hidden = false;
       connectStream();
       setInterval(() => {
         if (state.signedOut || document.hidden) return;

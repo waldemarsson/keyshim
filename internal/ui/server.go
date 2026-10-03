@@ -1,9 +1,12 @@
 // Package ui serves the local management web UI.
 //
-// The UI listens on loopback, but proxy clients in a VM may still reach the
-// host's loopback, so every API request needs a session from a one-time login
-// token printed at startup. Secret values can be written but are never
-// returned.
+// The UI listens on loopback, but a VM may still reach the host's loopback,
+// so every API request needs a session. A single-use login token, printed at
+// startup and replaced after each use, is exchanged for a session token that
+// the page keeps in origin-scoped storage and sends as a bearer header.
+// Cookies are not used: browsers send them to every port on a host, including
+// ports a VM forwards to the host. Secret values can be written but are
+// never returned.
 package ui
 
 import (
@@ -34,11 +37,11 @@ import (
 var staticFiles embed.FS
 
 const (
-	sessionCookie  = "fullmakt_session"
-	requestHeader  = "X-Fullmakt-Request"
-	maxBodyBytes   = 1 << 20
-	checkTimeout   = 30 * time.Second
-	streamKeepWarm = 25 * time.Second
+	sessionLifetime = 12 * time.Hour
+	requestHeader   = "X-Fullmakt-Request"
+	maxBodyBytes    = 1 << 20
+	checkTimeout    = 30 * time.Second
+	streamKeepWarm  = 25 * time.Second
 )
 
 const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
@@ -53,6 +56,9 @@ type Options struct {
 	ProxyListen string
 	Version     string
 	Logger      *slog.Logger
+	// OnLoginURL receives the login URL at startup and after each login,
+	// when the previous token stops working.
+	OnLoginURL func(string)
 }
 
 // Server is the UI's http.Handler.
@@ -63,7 +69,7 @@ type Server struct {
 	handler      http.Handler
 
 	mu       sync.Mutex
-	sessions map[string]bool
+	sessions map[string]time.Time // session token -> expiry
 }
 
 // New returns a UI server with a fresh login token.
@@ -75,7 +81,7 @@ func New(o Options) (*Server, error) {
 	s := &Server{
 		opts:     o,
 		token:    randomHex(32),
-		sessions: map[string]bool{},
+		sessions: map[string]time.Time{},
 		// Only names that point at this listener, which blocks DNS rebinding.
 		allowedHosts: map[string]bool{
 			o.Listen:            true,
@@ -90,7 +96,11 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	api := http.NewServeMux()
+	api.HandleFunc("DELETE /api/session", s.logout)
 	api.HandleFunc("GET /api/status", s.status)
+	api.HandleFunc("GET /api/clients", s.listClients)
+	api.HandleFunc("POST /api/clients", s.addClient)
+	api.HandleFunc("DELETE /api/clients/{name}", s.deleteClient)
 	api.HandleFunc("GET /api/ca.pem", s.caCert)
 	api.HandleFunc("GET /api/config", s.getConfig)
 	api.HandleFunc("PUT /api/config", s.putConfig)
@@ -98,22 +108,36 @@ func New(o Options) (*Server, error) {
 	api.HandleFunc("GET /api/secrets", s.listSecrets)
 	api.HandleFunc("POST /api/secrets/{name}/check", s.checkSecret)
 	api.HandleFunc("GET /api/providers/{name}/keys", s.listKeys)
-	api.HandleFunc("PUT /api/providers/{name}/keys/{key}", s.setKey)
+	api.HandleFunc("POST /api/providers/{name}/keys", s.addKey)
 	api.HandleFunc("DELETE /api/providers/{name}/keys/{key}", s.deleteKey)
 	api.HandleFunc("GET /api/events", s.events)
 	api.HandleFunc("GET /api/events/stream", s.eventStream)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /login", s.login)
+	mux.HandleFunc("POST /api/session", s.login)
 	mux.Handle("/api/", s.requireSession(api))
 	mux.Handle("/", http.FileServerFS(static))
 	s.handler = s.guard(mux)
+	s.announce()
 	return s, nil
 }
 
-// LoginURL returns the one-time URL that starts a browser session.
+// LoginURL returns the current single-use login URL. The token is in the
+// fragment, so it is never sent to the server in a request line or logged.
 func (s *Server) LoginURL() string {
-	return "http://" + s.opts.Listen + "/login?token=" + s.token
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginURL()
+}
+
+func (s *Server) loginURL() string {
+	return "http://" + s.opts.Listen + "/#login=" + s.token
+}
+
+func (s *Server) announce() {
+	if s.opts.OnLoginURL != nil {
+		s.opts.OnLoginURL(s.LoginURL())
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -151,34 +175,63 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	})
 }
 
+// login exchanges the single-use login token for a session token. The login
+// token is replaced on success, and the new login URL is announced.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1 {
-		http.Error(w, "fullmakt: invalid login token. Open the URL printed by `fullmakt run`.", http.StatusForbidden)
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	id := randomHex(32)
+	now := time.Now()
 	s.mu.Lock()
-	s.sessions[id] = true
+	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.token)) != 1 {
+		s.mu.Unlock()
+		writeError(w, http.StatusForbidden, errors.New("invalid or already used login token; use the newest URL printed by fullmakt"))
+		return
+	}
+	s.token = randomHex(32)
+	for id, expiry := range s.sessions {
+		if now.After(expiry) {
+			delete(s.sessions, id)
+		}
+	}
+	id, expiry := randomHex(32), now.Add(sessionLifetime)
+	s.sessions[id] = expiry
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    id,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	// Redirect so the token leaves the address bar.
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+
+	s.opts.Logger.Info("UI login; the previous login URL no longer works")
+	s.announce()
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, map[string]any{"session": id, "expiresAt": expiry})
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	id, _ := bearerToken(r)
+	s.mu.Lock()
+	delete(s.sessions, id)
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	return token, ok && strings.EqualFold(scheme, "Bearer") && token != ""
 }
 
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
+		id, ok := bearerToken(r)
 		s.mu.Lock()
-		ok := err == nil && s.sessions[c.Value]
+		expiry, known := s.sessions[id]
+		if known && time.Now().After(expiry) {
+			delete(s.sessions, id)
+			known = false
+		}
 		s.mu.Unlock()
-		if !ok {
+		if !ok || !known {
 			writeError(w, http.StatusUnauthorized, errors.New("not signed in"))
 			return
 		}
@@ -196,6 +249,7 @@ type statusResponse struct {
 	Providers   int    `json:"providers"`
 	Secrets     int    `json:"secrets"`
 	Rules       int    `json:"rules"`
+	Clients     int    `json:"clients"`
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
@@ -209,6 +263,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		Providers:   len(cfg.Providers),
 		Secrets:     len(cfg.Secrets),
 		Rules:       len(cfg.Rules),
+		Clients:     len(cfg.Clients),
 	})
 }
 
@@ -244,6 +299,48 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	}
 	s.opts.Logger.Info("configuration reloaded from disk")
 	s.getConfig(w, r)
+}
+
+type clientInfo struct {
+	Name    string    `json:"name"`
+	AddedAt time.Time `json:"addedAt"`
+}
+
+// listClients returns client names; token hashes stay on the server.
+func (s *Server) listClients(w http.ResponseWriter, _ *http.Request) {
+	out := []clientInfo{}
+	for _, c := range s.opts.App.Config().Clients {
+		out = append(out, clientInfo{Name: c.Name, AddedAt: c.AddedAt})
+	}
+	writeJSON(w, out)
+}
+
+// addClient creates a client and returns its token, which is shown once.
+func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	token, err := s.opts.App.AddClient(body.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.opts.Logger.Info("proxy client added from UI", "client", body.Name)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, map[string]string{"name": body.Name, "token": token})
+}
+
+func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request) {
+	if err := s.opts.App.DeleteClient(r.PathValue("name")); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	s.opts.Logger.Info("proxy client deleted from UI", "client", r.PathValue("name"))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listSecrets(w http.ResponseWriter, _ *http.Request) {
@@ -290,27 +387,37 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	keys, err := local.Keys()
+	entries, err := local.Entries()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, keys)
+	writeJSON(w, entries)
 }
 
-func (s *Server) setKey(w http.ResponseWriter, r *http.Request) {
+// addKey stores a new local value. Existing values cannot be replaced or
+// read; they can only be deleted.
+func (s *Server) addKey(w http.ResponseWriter, r *http.Request) {
 	local, ok := s.localProvider(w, r)
 	if !ok {
 		return
 	}
 	var body struct {
+		Name  string `json:"name"`
 		Value string `json:"value"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	s.changeKey(w, r, local.Set(r.PathValue("key"), body.Value), "set")
+	if err := local.Add(body.Name, body.Value); errors.Is(err, secrets.ErrExists) {
+		writeError(w, http.StatusConflict, err)
+		return
+	} else if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	s.afterKeyChange(w, "added", r.PathValue("name"), body.Name)
 }
 
 func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
@@ -318,20 +425,20 @@ func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.changeKey(w, r, local.Delete(r.PathValue("key")), "deleted")
-}
-
-func (s *Server) changeKey(w http.ResponseWriter, r *http.Request, err error, action string) {
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if err := local.Delete(r.PathValue("key")); err != nil {
+		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	s.afterKeyChange(w, "deleted", r.PathValue("name"), r.PathValue("key"))
+}
+
+func (s *Server) afterKeyChange(w http.ResponseWriter, action, provider, key string) {
 	// Drop cached values so the change takes effect immediately.
 	if err := s.opts.App.ReloadSecrets(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.opts.Logger.Info("local secret "+action+" from UI", "provider", r.PathValue("name"), "key", r.PathValue("key"))
+	s.opts.Logger.Info("local secret "+action+" from UI", "provider", provider, "key", key)
 	w.WriteHeader(http.StatusNoContent)
 }
 

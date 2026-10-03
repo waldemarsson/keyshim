@@ -76,3 +76,36 @@ func TestAllowNonLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRefusesConfigWritableByOthers(t *testing.T) {
+	path := writeConfig(t, "listen: 127.0.0.1:8899\n")
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Errorf("group-writable config: err = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Errorf("world-readable but owner-writable config should load: %v", err)
+	}
+}
+
+func TestClients(t *testing.T) {
+	hash := HashToken("fmk_token")
+	valid := "clients:\n  - {name: agentbox, tokenHash: " + hash + "}\n"
+	if _, err := Load(writeConfig(t, valid)); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"bad hash":  "clients:\n  - {name: agentbox, tokenHash: md5:abc}\n",
+		"bad name":  "clients:\n  - {name: 'a b', tokenHash: " + hash + "}\n",
+		"duplicate": "clients:\n  - {name: a, tokenHash: " + hash + "}\n  - {name: a, tokenHash: " + hash + "}\n",
+	} {
+		if _, err := Load(writeConfig(t, content)); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}

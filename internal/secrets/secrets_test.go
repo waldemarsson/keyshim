@@ -3,52 +3,12 @@ package secrets
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/waldemarsson/fullmakt/internal/config"
 )
-
-func TestLocal(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "secrets.yaml")
-	if err := os.WriteFile(path, []byte("token: abc123\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	l := NewLocal(path)
-	ctx := context.Background()
-
-	if v, err := l.Fetch(ctx, "token", ""); err != nil || v != "abc123" {
-		t.Errorf("Fetch = %q, %v", v, err)
-	}
-	if _, err := l.Fetch(ctx, "missing", ""); err == nil {
-		t.Error("missing key: want error")
-	}
-	if _, err := l.Fetch(ctx, "token", "v1"); err == nil {
-		t.Error("version: want error")
-	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := l.Fetch(ctx, "token", "")
-	if err == nil || !strings.Contains(err.Error(), "chmod 600") {
-		t.Errorf("readable file: err = %v", err)
-	}
-}
-
-func TestLocalInvalidYAMLHidesContent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "secrets.yaml")
-	if err := os.WriteFile(path, []byte("token: [abc123\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := NewLocal(path).Fetch(context.Background(), "token", "")
-	if err == nil || strings.Contains(err.Error(), "abc123") {
-		t.Errorf("err = %v", err)
-	}
-}
 
 type countingProvider struct {
 	mu    sync.Mutex
