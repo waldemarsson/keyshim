@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -255,8 +256,10 @@ func TestPutConfig(t *testing.T) {
 	if saved.Rules[0].Host != "b.com" || saved.Secrets["s"].TTL.String() != "5m0s" {
 		t.Errorf("saved config = %+v", saved)
 	}
-	if info, _ := os.Stat(h.cfgPath); info.Mode().Perm() != 0o600 {
-		t.Errorf("config permissions = %#o", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(h.cfgPath); info.Mode().Perm() != 0o600 {
+			t.Errorf("config permissions = %#o", info.Mode().Perm())
+		}
 	}
 }
 

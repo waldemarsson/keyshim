@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -170,13 +171,16 @@ func (l *Local) read() (*localFile, error) {
 	defer fh.Close()
 
 	// Check the opened file, not the path, so the file cannot be swapped
-	// between the check and the read.
-	info, err := fh.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return nil, fmt.Errorf("%s: permissions %#o allow access by group or others; run chmod 600", l.path, perm)
+	// between the check and the read. Windows file modes do not reflect
+	// ACLs, so the check is skipped there (same as config.CheckWritableOnlyByOwner).
+	if runtime.GOOS != "windows" {
+		info, err := fh.Stat()
+		if err != nil {
+			return nil, err
+		}
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			return nil, fmt.Errorf("%s: permissions %#o allow access by group or others; run chmod 600", l.path, perm)
+		}
 	}
 	data, err := io.ReadAll(fh)
 	if err != nil {

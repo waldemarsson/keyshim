@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -46,8 +47,10 @@ func TestLocalEncryptedRoundTrip(t *testing.T) {
 	if strings.Contains(string(data), "abc123-secret") || strings.Contains(string(data), "token") {
 		t.Errorf("file reveals a value or name: %s", data)
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-		t.Errorf("permissions = %#o", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+			t.Errorf("permissions = %#o", info.Mode().Perm())
+		}
 	}
 
 	// A new provider instance with the same key reads it back, as after a restart.
@@ -121,6 +124,9 @@ func TestLocalRejectsPlaintextAndOpenPermissions(t *testing.T) {
 	_, err := l.Fetch(context.Background(), "token", "")
 	if err == nil || !strings.Contains(err.Error(), "keyshim secrets import") || strings.Contains(err.Error(), "abc123") {
 		t.Errorf("plaintext file: err = %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)

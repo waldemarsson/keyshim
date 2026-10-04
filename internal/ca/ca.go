@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -257,6 +258,11 @@ func writeExclusive(path string, data []byte, perm os.FileMode) error {
 }
 
 func checkPrivate(path string) error {
+	// Windows file modes do not reflect ACLs, so the check is skipped there
+	// (same as config.CheckWritableOnlyByOwner).
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return err

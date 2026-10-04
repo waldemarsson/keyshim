@@ -190,7 +190,17 @@ sudo. Options, as environment variables:
 To read the script before running it, download it first:
 `curl -fsSLO https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.sh`.
 
-Windows is not supported yet.
+Windows, amd64 and arm64:
+
+```powershell
+irm https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.ps1 | iex
+```
+
+Same checksum verification and environment variables as above, installing to
+`%LOCALAPPDATA%\keyshim` by default. File permission checks (see Security
+model) are skipped on Windows: file modes there do not reflect ACLs, so the
+guarantee reduces to "readable only by your user account" via NTFS defaults,
+not an enforced check.
 
 ## Build
 
@@ -205,11 +215,11 @@ go test -race ./...
 ### Releases
 
 Pushing a tag such as `v0.2.0` runs the CI checks, builds
-`keyshim_<os>_<arch>.tar.gz` for macOS and Linux (amd64, arm64) with
-`scripts/build-release.sh`, writes `SHA256SUMS`, attests build provenance
-(public repository only) and publishes a GitHub release. Tags with a hyphen,
-such as `v0.2.0-rc.1`, become pre-releases. Builds are reproducible: the
-same commit and Go version produce identical archives.
+`keyshim_<os>_<arch>.tar.gz` for macOS and Linux and `.zip` for Windows
+(amd64, arm64) with `scripts/build-release.sh`, writes `SHA256SUMS`, attests
+build provenance (public repository only) and publishes a GitHub release.
+Tags with a hyphen, such as `v0.2.0-rc.1`, become pre-releases. Builds are
+reproducible: the same commit and Go version produce identical archives.
 
 ## Use
 
