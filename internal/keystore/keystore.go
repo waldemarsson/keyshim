@@ -367,8 +367,11 @@ func writeMeta(dir string, m meta) error {
 	return f.Close()
 }
 
+// ErrKeychainUnavailable is returned when the OS keychain cannot be used.
+var ErrKeychainUnavailable = errors.New("OS keychain unavailable")
+
 func keychainError(err error) error {
-	return fmt.Errorf("OS keychain unavailable (%v); on a machine without a keychain, such as headless Linux, set `encryption: {key: passphrase}` in the configuration", err)
+	return fmt.Errorf("%w (%v); on a machine without a keychain, such as headless Linux, set `encryption: {key: passphrase}` in the configuration", ErrKeychainUnavailable, err)
 }
 
 func randomBytes(n int) []byte {

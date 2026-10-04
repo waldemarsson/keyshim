@@ -26,7 +26,7 @@ before committing.
 
 | Path | Owns |
 |---|---|
-| `cmd/keyshim` | CLI: `run`, `check`, `ca`, `client`, `secrets`, `key`, `version` |
+| `cmd/keyshim` | CLI: `init`, `run`, `check`, `ca`, `client`, `secrets`, `key`, `version` |
 | `internal/config` | YAML config, defaults, validation, warnings, atomic writes |
 | `internal/keystore` | Master key (OS keychain or passphrase), `Seal`/`Open`; `keystoretest` for tests |
 | `internal/secrets` | Providers (encrypted local file, Azure Key Vault) and the TTL cache |

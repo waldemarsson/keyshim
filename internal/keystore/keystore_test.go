@@ -115,6 +115,9 @@ func TestKeychainUnavailable(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "passphrase") {
 		t.Errorf("err = %v, want hint to use a passphrase", err)
 	}
+	if !errors.Is(err, keystore.ErrKeychainUnavailable) {
+		t.Errorf("err = %v, want ErrKeychainUnavailable", err)
+	}
 }
 
 type failingKeyring struct{}

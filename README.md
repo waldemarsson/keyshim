@@ -224,14 +224,21 @@ reproducible: the same commit and Go version produce identical archives.
 ## Use
 
 ```bash
-mkdir -p ~/.config/keyshim && chmod 700 ~/.config/keyshim
-cp config.example.yaml ~/.config/keyshim/config.yaml
-keyshim client add agentbox  # proxy credentials for the sandbox, shown once
+keyshim init                 # config, master key, CA and a first proxy client (token shown once)
 keyshim secrets add github   # asks for the value without echo; or pipe it in
+# add a secret and a rule to ~/.config/keyshim/config.yaml, or use the UI
 keyshim check -resolve       # validate config and fetch every secret (values are never printed)
 keyshim ca > keyshim-ca.pem  # public CA certificate for the client
 keyshim run
 ```
+
+`keyshim init` writes a minimal `~/.config/keyshim/config.yaml`, creates the
+master key and the CA, asks for a first proxy client and prints the next
+steps. It never replaces existing files, so it is safe to run again.
+Options: `-client <name>` adds the client without asking, `-passphrase`
+uses a passphrase instead of the OS keychain (chosen automatically when no
+keychain is available), and `-config <path>` sets up another location.
+`config.example.yaml` documents every option.
 
 For Azure Key Vault, sign in with `az login` (or use managed or workload
 identity). The identity needs the *Key Vault Secrets User* role on the vault.

@@ -98,3 +98,4 @@ case ":$PATH:" in
   *":$install_dir:"*) ;;
   *) echo "Add $install_dir to your PATH to run keyshim directly." ;;
 esac
+echo "Next: run \`keyshim init\` to set up the configuration, master key and CA."
