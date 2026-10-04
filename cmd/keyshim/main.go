@@ -31,6 +31,7 @@ var version = "dev"
 const usage = `Usage: keyshim <command> [flags]
 
 Commands:
+  init     Set up the configuration, master key, CA and a first proxy client
   run      Start the proxy
   check    Validate the configuration; -resolve also fetches every secret
   ca       Print the CA certificate (PEM) for client trust stores
@@ -53,6 +54,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "init":
+		err = initCmd(os.Args[2:])
 	case "run":
 		err = runCmd(os.Args[2:])
 	case "check":

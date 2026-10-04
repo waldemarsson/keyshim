@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"net/url"
@@ -178,6 +179,9 @@ func DefaultDir() (string, error) {
 
 // Load reads, defaults and validates the configuration at path.
 func Load(path string) (*Config, error) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%s: %w; run `keyshim init` to create it", path, fs.ErrNotExist)
+	}
 	if err := CheckWritableOnlyByOwner(path); err != nil {
 		return nil, err
 	}

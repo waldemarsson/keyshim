@@ -108,6 +108,7 @@ try {
   if (($env:Path -split ';') -notcontains $installDir) {
     Write-Host "Add $installDir to your PATH to run keyshim directly."
   }
+  Write-Host "Next: run 'keyshim init' to set up the configuration, master key and CA."
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
