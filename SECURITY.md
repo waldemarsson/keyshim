@@ -26,8 +26,8 @@ Only the latest release receives security fixes.
 ## Scope
 
 The security model in the [README](README.md#security-model) describes what
-keyshim guarantees and what it does not. Reports about the listed
-non-guarantees, for example an agent using a secret for a request that a rule
+keyshim is designed to protect and what it does not. Reports about the listed
+limits, for example an agent using a secret for a request that a rule
 allows, are expected behaviour rather than vulnerabilities, but suggestions
 for hardening are still welcome.
 

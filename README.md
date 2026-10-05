@@ -22,11 +22,11 @@ into each request on the way out.
 
 > **No warranty.** Keyshim is provided "as is", without warranty of any
 > kind, under the [Apache License 2.0](LICENSE). It reduces exposure of
-> secrets to sandboxed agents but cannot rule out leaks: the guarantees below
+> secrets to sandboxed agents but cannot rule out leaks: the properties below
 > are design goals, not promises. Review the limits, keep tokens narrowly
 > scoped, and report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
-Guarantees, when keyshim runs outside the sandbox (on the host or in a
+Designed to ensure, when keyshim runs outside the sandbox (on the host or in a
 separate VM or container):
 
 - **The agent cannot read secret values.** They exist only in keyshim's
@@ -39,7 +39,7 @@ separate VM or container):
   everything else gets 407. Listening on loopback alone is not enough: other
   processes, users, VMs and containers on the host can reach it too.
 
-Not guaranteed:
+Limits:
 
 - **The agent can still use the secrets** for any request the rules allow.
   Keep tokens narrowly scoped and rules tight.
@@ -49,7 +49,7 @@ Not guaranteed:
   the host can read the CA key, the local secrets file and the process memory.
 - **Derived credentials are not redacted.** If an API exchanges the injected
   token for another token in the response body, the client receives that one.
-- **Redaction is a backstop, not a guarantee.** Injected values are replaced
+- **Redaction is a best-effort backstop.** Injected values are replaced
   with `[REDACTED]` when they appear verbatim in response headers or bodies.
   An endpoint that stores a header and returns it in pieces or transformed
   gets past that. Only write rules for APIs that do not reflect
@@ -199,7 +199,7 @@ irm https://raw.githubusercontent.com/waldemarsson/keyshim/main/install.ps1 | ie
 Same checksum verification and environment variables as above, installing to
 `%LOCALAPPDATA%\keyshim` by default. File permission checks (see Security
 model) are skipped on Windows: file modes there do not reflect ACLs, so the
-guarantee reduces to "readable only by your user account" via NTFS defaults,
+protection reduces to "readable only by your user account" via NTFS defaults,
 not an enforced check.
 
 ## Build
